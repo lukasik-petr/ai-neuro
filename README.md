@@ -1,9 +1,4 @@
-#ai-neuro
-
------------------------------------------------------------------------------------------------------- 
- ai-neuro
- (C) GNU General Public License,
- pro potreby projektu TM-AI vyrobil Petr Lukasik , 2022 ");
+ ai-neuro (C) GNU General Public License, pro potreby projektu TM-AI vyrobil Petr Lukasik , 2022 
 ------------------------------------------------------------------------------------------------------ 
  program pro projekt TM-AI v TAJMAC-ZPS,a.s.
  predikce vlivu teploty na presnost obrabeni
