@@ -1,4 +1,6 @@
- ai-neuro (C) GNU General Public License, pro potreby projektu TM-AI vyrobil Petr Lukasik , 2022 
+ai-neuro 
+(C) GNU General Public License, 
+pro potreby projektu TM-AI vyrobil Petr Lukasik , 2022 
 ------------------------------------------------------------------------------------------------------ 
  program pro projekt TM-AI v TAJMAC-ZPS,a.s.
  predikce vlivu teploty na presnost obrabeni
@@ -17,31 +19,31 @@
  starosti...
 
  Pozor pro instalaci je nutno udelat nekolik veci
-  1. instalace prostredi miniconda 
-       a. stahnout z webu miniconda3 v nejnovejsi verzi
-       b. chmod +x Miniconda3-py39_4.11.0-Linux-x86_64.sh
-       c. ./Miniconda3-py39_4.11.0-Linux-x86_64.sh
+  1. instalace prostredi miniconda\n 
+       a. stahnout z webu miniconda3 v nejnovejsi verzi\n
+       b. chmod +x Miniconda3-py39_4.11.0-Linux-x86_64.sh\n
+       c. ./Miniconda3-py39_4.11.0-Linux-x86_64.sh\n
 
-  2. update miniconda
-       conda update conda
+  2. update miniconda\n
+       conda update conda\n
 
-  3. vyrobit behove prostredi 'tf' v miniconda
-       conda create -n tf python=3.8
+  3. vyrobit behove prostredi 'tf' v miniconda\n
+       conda create -n tf python=3.8\n
 
-  4. aktivovat behove prostredi tf (preX tim je nutne zevrit a znovu
-     otevrit terminal aby se conda aktivovala.
-       conda activate  tf
+  4. aktivovat behove prostredi tf (pred tim je nutne zavrit a znovu\n
+     otevrit terminal aby se conda aktivovala.\n
+       conda activate  tf\n
 
-  5. instalovat tyto moduly (pomoci conda)
-       conda install tensorflow=2.8 
-       conda install mathplotlib
-       conda install scikit-learn-intelex
-       conda install pandas
-       conda install numpy
-       conda install keras
+  5. instalovat tyto moduly (pomoci conda)\n
+       conda install tensorflow=2.8\n
+       conda install mathplotlib\n
+       conda install scikit-learn-intelex\n
+       conda install pandas\n
+       conda install numpy\n
+       conda install keras\n
 
-  6. v prostredi tf jeste upgrade tensorflow 
-       pip3 install --upgrade tensorflow
+  6. v prostredi tf jeste upgrade tensorflow\n
+       pip3 install --upgrade tensorflow\n
 ------------------------------------------------------------------------------------------------------ 
 
 ------------------------------------------------------------------------------------------------------ 
