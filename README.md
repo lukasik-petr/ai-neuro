@@ -2,15 +2,15 @@
 ------------------------------------------------------------------------------------------------------ 
  program pro projekt TM-AI v TAJMAC-ZPS,a.s.
  predikce vlivu teploty na presnost obrabeni
- Prerekvizity: linux Debian-11 nebo Ubuntu-20.04,);
-               miniconda3,
-               python 3.9,
-               tensorflow 2.8,
-               mathplotlib,
-               scikit-learn-intelex,
-               pandas,
-               numpy,
-               keras,
+ Prerekvizity: linux Debian-11 nebo Ubuntu-20.04,
+  miniconda3,
+  python 3.9,
+  tensorflow 2.8,
+  mathplotlib,
+  scikit-learn-intelex,
+  pandas,
+  numpy,
+  keras
 
  Windows se pokud mozno vyhnete. Tak je doporuceno v manualech TensorFlow
  i kdyz si myslim ze by to take fungovalo. Ale proc si delat zbytecne
@@ -152,4 +152,4 @@
                   pandas,  
                   numpy,  
                   keras   
-    return();
+    
