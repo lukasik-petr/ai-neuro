@@ -1,54 +1,55 @@
-# ai-neuro
-#------------------------------------------------------------------------------
-# ai-neuro
-# (C) GNU General Public License,
-# pro potreby projektu TM-AI vyrobil Petr Lukasik , 2022 ");
-#------------------------------------------------------------------------------
-# program pro projekt TM-AI v TAJMAC-ZPS,a.s.
-# predikce vlivu teploty na presnost obrabeni
-# Prerekvizity: linux Debian-11 nebo Ubuntu-20.04,);
-#               miniconda3,
-#               python 3.9,
-#               tensorflow 2.8,
-#               mathplotlib,
-#               scikit-learn-intelex,
-#               pandas,
-#               numpy,
-#               keras,
-#
-# Windows se pokud mozno vyhnete. Tak je doporuceno v manualech TensorFlow
-# i kdyz si myslim ze by to take fungovalo. Ale proc si delat zbytecne
-# starosti...
-#
-# Pozor pro instalaci je nutno udelat nekolik veci
-#  1. instalace prostredi miniconda 
-#       a. stahnout z webu miniconda3 v nejnovejsi verzi
-#       b. chmod +x Miniconda3-py39_4.11.0-Linux-x86_64.sh
-#       c. ./Miniconda3-py39_4.11.0-Linux-x86_64.sh
-#
-#  2. update miniconda
-#       conda update conda
-#
-#  3. vyrobit behove prostredi 'tf' v miniconda
-#       conda create -n tf python=3.8
-#
-#  4. aktivovat behove prostredi tf (preX tim je nutne zevrit a znovu
-#     otevrit terminal aby se conda aktivovala.
-#       conda activate  tf
-#
-#  5. instalovat tyto moduly (pomoci conda)
-#       conda install tensorflow=2.8 
-#       conda install mathplotlib
-#       conda install scikit-learn-intelex
-#       conda install pandas
-#       conda install numpy
-#       conda install keras
-#
-#  6. v prostredi tf jeste upgrade tensorflow 
-#       pip3 install --upgrade tensorflow
-#------------------------------------------------------------------------------
+#ai-neuro
 
-    ------------------------------------------------------------------------------------------------------ 
+------------------------------------------------------------------------------------------------------ 
+ ai-neuro
+ (C) GNU General Public License,
+ pro potreby projektu TM-AI vyrobil Petr Lukasik , 2022 ");
+------------------------------------------------------------------------------------------------------ 
+ program pro projekt TM-AI v TAJMAC-ZPS,a.s.
+ predikce vlivu teploty na presnost obrabeni
+ Prerekvizity: linux Debian-11 nebo Ubuntu-20.04,);
+               miniconda3,
+               python 3.9,
+               tensorflow 2.8,
+               mathplotlib,
+               scikit-learn-intelex,
+               pandas,
+               numpy,
+               keras,
+
+ Windows se pokud mozno vyhnete. Tak je doporuceno v manualech TensorFlow
+ i kdyz si myslim ze by to take fungovalo. Ale proc si delat zbytecne
+ starosti...
+
+ Pozor pro instalaci je nutno udelat nekolik veci
+  1. instalace prostredi miniconda 
+       a. stahnout z webu miniconda3 v nejnovejsi verzi
+       b. chmod +x Miniconda3-py39_4.11.0-Linux-x86_64.sh
+       c. ./Miniconda3-py39_4.11.0-Linux-x86_64.sh
+
+  2. update miniconda
+       conda update conda
+
+  3. vyrobit behove prostredi 'tf' v miniconda
+       conda create -n tf python=3.8
+
+  4. aktivovat behove prostredi tf (preX tim je nutne zevrit a znovu
+     otevrit terminal aby se conda aktivovala.
+       conda activate  tf
+
+  5. instalovat tyto moduly (pomoci conda)
+       conda install tensorflow=2.8 
+       conda install mathplotlib
+       conda install scikit-learn-intelex
+       conda install pandas
+       conda install numpy
+       conda install keras
+
+  6. v prostredi tf jeste upgrade tensorflow 
+       pip3 install --upgrade tensorflow
+------------------------------------------------------------------------------------------------------ 
+
+------------------------------------------------------------------------------------------------------ 
     pouziti: <nazev_programu> <arg1> <arg2> <arg3> <arg4>
     ai-neuro.py -t <--typ> -m <--model> -e <--epochs> -b <--batch> ")
      
