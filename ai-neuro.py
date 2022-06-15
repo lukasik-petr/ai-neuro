@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 
 #------------------------------------------------------------------------------
-# ai-neuro3D 
+# ai-neuro
 # (C) GNU General Public License,
 # pro potreby projektu TM-AI vyrobil Petr Lukasik , 2022 ");
 #------------------------------------------------------------------------------
@@ -33,12 +33,12 @@
 #  3. vyrobit behove prostredi 'tf' v miniconda
 #       conda create -n tf python=3.8
 #
-#  4. aktivovat behove prostredi tf (pred tim je nutne zevrit a znovu
+#  4. aktivovat behove prostredi tf (preX tim je nutne zevrit a znovu
 #     otevrit terminal aby se conda aktivovala.
 #       conda activate  tf
 #
 #  5. instalovat tyto moduly (pomoci conda)
-#       conda install tensorflow 
+#       conda install tensorflow=2.8 
 #       conda install mathplotlib
 #       conda install scikit-learn-intelex
 #       conda install pandas
@@ -93,17 +93,16 @@ from tensorflow.keras.models import load_model
 from matplotlib import cm;
 from datetime import datetime
 from _cffi_backend import string
+from pandas.core.frame import DataFrame
 
 
 class DataFactory():
     
 
     df_parmX_predict = [];
-    df_parmY_predict = [];
-    df_parmZ_predict = [];
     
     @dataclass
-    class DataTrainX:
+    class DataTrain:
         model:     object              #model neuronove site
         train:     object              #treninkova mnozina
         valid:     object              #validacni mnozina
@@ -112,31 +111,10 @@ class DataFactory():
         df_parm_y: string              #mnozina vstup dat (df_parmX, df_parmY, df_parmZ
         axis:      string              #osa X, Y, Z
 
-    @dataclass
-    class DataTrainY:
-        model:     object              #model neuronove site
-        train:     object              #treninkova mnozina
-        valid:     object              #validacni mnozina
-        test:      object              #testovaci mnozina
-        df_parm_x: string              #mnozina vstup dat (df_parmx, df_parmy, df_parmz
-        df_parm_y: string              #mnozina vstup dat (df_parmX, df_parmY, df_parmZ
-        axis:      string              #osa X, Y, Z
-
-    @dataclass
-    class DataTrainZ:
-        model:     object              #model neuronove site
-        train:     object              #treninkova mnozina
-        valid:     object              #validacni mnozina
-        test:      object              #testovaci mnozina
-        df_parm_x: string              #mnozina vstup dat (df_parmx, df_parmy, df_parmz
-        df_parm_y: string              #mnozina vstup dat (df_parmX, df_parmY, df_parmZ
-        axis:      string              #osa X, Y, Z
 
     @dataclass
     class DataTrainDim:
-          DataTrainX: object;
-          DataTrainY: object;
-          DataTrainZ: object;
+          DataTrain: object;
           
     @dataclass
     class DataResult:
@@ -149,23 +127,18 @@ class DataFactory():
     @dataclass
     class DataResultDim:
           DataResultX: object;
-          DataResultY: object;
-          DataResultZ: object;
 
-    def __init__(self, path_to_result):
+    def __init__(self, path_to_result, window):
         
     #Vystupni list parametru - co budeme chtit po siti predikovat
-        self.df_parmx = ['machinedata_m0412','teplota_pr01', 'x_temperature']
-        self.df_parmy = ['machinedata_m0413','teplota_pr02', 'y_temperature']
-        self.df_parmz = ['machinedata_m0414','teplota_pr03', 'z_temperature']
+        self.df_parmx = ['teplota_pr01', 'x_temperature']
         
     #Tenzor predlozeny k uceni site
-        self.df_parmX = ['machinedata_m0412','teplota_pr01', 'x_temperature']
-        self.df_parmY = ['machinedata_m0413','teplota_pr02', 'y_temperature']
-        self.df_parmZ = ['machinedata_m0414','teplota_pr03', 'z_temperature']
+        self.df_parmX = ['machinedata_m0412','machinedata_m0413','machinedata_m0414','teplota_pr01', 'x_temperature']
         
         self.path_to_result = path_to_result;
         self.getParmsFromFile();
+        self.window = window;
         
     #---------------------------------------------------------------------------
     # DataFactory
@@ -178,9 +151,7 @@ class DataFactory():
             txdt_b = True;
         
         try:        
-            self.DataTrainDim.DataTrainX = None;
-            self.DataTrainDim.DataTrainY = None;
-            self.DataTrainDim.DataTrainZ = None;
+            self.DataTrainDim.DataTrain = None;
         
         #files = os.path.join("./br_data", "tm-ai_parm01*.csv");
         #files = os.path.join("./br_data", "tm-ai_2*.csv");
@@ -196,15 +167,14 @@ class DataFactory():
         
         # vyber dat dle timestampu
             df["timestamp"] = pd.to_datetime(df["timestamp_x"].str.slice(0, 18));
-            df = df[df["timestamp"].between('2022-02-15 08:41:00', '2022-04-09 12:00:00')];
+            df = df[df["timestamp"].between('2022-02-15 08:41:00', '2022-04-09 13:00:00')];
             df_test = df[df["timestamp"].between(timestamp_start, timestamp_stop)];
             
-
-            if shuffling:
-                df = df.reset_index(drop=True)
-                df = shuffle(df)
-                df = df.reset_index(drop=True)
             
+            if self.window >= len(df_test) and txdt_b:
+                print("Prilis maly vzorek dat pro predikci - exit(1)");
+                sys.exit(1);
+
             size = len(df.index)
             size_train = math.floor(size * 6 / 12)
             size_valid = math.floor(size * 4 / 12)
@@ -213,37 +183,17 @@ class DataFactory():
             if self.df_parmx == None or self.df_parmX == None:
                 print("");
             else:
-                self.DataTrainDim.DataTrainX = self.setDataX(df=df, 
+                self.DataTrainDim.DataTrain = self.setDataX(df=df, 
                                                              df_test=df_test, 
                                                              size_train=size_train, 
                                                              size_valid=size_valid, 
                                                              size_test=size_test,
-                                                             txdt_b=txdt_b 
+                                                             txdt_b=txdt_b,
+                                                             shuffling=shuffling 
                                                         );
             
-            if self.df_parmy == None or self.df_parmY == None:
-                print("");
-            else:
-                self.DataTrainDim.DataTrainY = self.setDataY(df=df, 
-                                                             df_test=df_test, 
-                                                             size_train=size_train, 
-                                                             size_valid=size_valid, 
-                                                             size_test=size_test,
-                                                             txdt_b=txdt_b 
-                                                        );
-            
-            if self.df_parmz == None or self.df_parmZ == None:
-                print("");
-            else:
-                self.DataTrainDim.DataTrainZ = self.setDataZ(df=df, 
-                                                             df_test=df_test, 
-                                                             size_train=size_train, 
-                                                             size_valid=size_valid, 
-                                                             size_test=size_test,
-                                                             txdt_b=txdt_b 
-                                                        );
 
-            return self.DataTrainDim(self.DataTrainDim.DataTrainX, self.DataTrainDim.DataTrainY, self.DataTrainDim.DataTrainZ);
+            return self.DataTrainDim(self.DataTrainDim.DataTrain);
 
         except Exception as ex:
             traceback.print_exc();
@@ -274,20 +224,6 @@ class DataFactory():
                     if "null" in line:
                         self.df_parmx = None;
                         
-                y = line.startswith("df_parmy=");
-                if y:
-                    line = line.replace("df_parmy=", "");
-                    self.df_parmy = line.split(",")
-                    if "null" in line:
-                        self.df_parmy = None;
-
-                z = line.startswith("df_parmz=");
-                if z:
-                    line = line.replace("df_parmz=", "");
-                    self.df_parmz = line.split(",")
-                    if "null" in line:
-                        self.df_parmz = None;
-                
                 X = line.startswith("df_parmX=");
                 if X:
                     line = line.replace("df_parmX=", "");
@@ -295,19 +231,6 @@ class DataFactory():
                     if "null" in line:
                         self.df_parmX = None;
             
-                Y = line.startswith("df_parmY=");
-                if Y:
-                    line = line.replace("df_parmY=", "");
-                    self.df_parmY = line.split(",")
-                    if "null" in line:
-                        self.df_parmY = None;
-
-                Z = line.startswith("df_parmZ=");
-                if Z:
-                    line = line.replace("df_parmZ=", "");
-                    self.df_parmZ = line.split(",")
-                    if "null" in line:
-                        self.df_parmZ = None;
                 
             file.close();
             print("parametry nacteny z ", parmfile);       
@@ -343,29 +266,41 @@ class DataFactory():
     #               dataset_cols - pocet sloupcu v datove sade. 
     #-----------------------------------------------------------------------
     
-    
-    def toTensorLSTM(dataset, window=64):
+        def toTensorLSTM(dataset, window):
         
-        X_dataset = []  #data pro tf.fit(x - data pro uceni
-        y_dataset = []  #data pro tf.fit(y - vstupni data 
-                        #jen v pripade ze vst. data nejsou definovana
+            X_dataset = []  #data pro tf.fit(x - data pro uceni
+            y_dataset = []  #data pro tf.fit(y - vstupni data 
+                            #jen v pripade ze vst. data nejsou definovana
                         
-        dataset_rows, dataset_cols = dataset.shape;
+            dataset_rows, dataset_cols = dataset.shape;
         
-        if window >= dataset_rows:
-            print("prilis maly  vektor dat k uceni!!! \nparametr window je vetsi nez delka vst. vektoru");
-            logging.info("prilis maly  vektor dat k uceni!!! \nparametr window je vetsi nez delka vst. vektoru");
+            if window >= dataset_rows:
+                print("prilis maly  vektor dat k uceni!!! \nparametr window je vetsi nez delka vst. vektoru");
+                logging.info("prilis maly  vektor dat k uceni!!! \nparametr window je vetsi nez delka vst. vektoru");
 
-        for i in range(window, dataset_rows):
-            X_dataset.append(dataset[i - window : i, ]);
-            y_dataset.append(dataset[i, ]);
+            for i in range(window, dataset_rows):
+                X_dataset.append(dataset[i - window : i, ]);
+                y_dataset.append(dataset[i, ]);
             
-        X_dataset = np.array(X_dataset);
-        y_dataset = np.array(y_dataset);
+            X_dataset = np.array(X_dataset);
+            y_dataset = np.array(y_dataset);
         
-        X_dataset = np.reshape(X_dataset, (X_dataset.shape[0], X_dataset.shape[1], dataset_cols));
+            X_dataset = np.reshape(X_dataset, (X_dataset.shape[0], X_dataset.shape[1], dataset_cols));
         
-        return NeuronLayerLSTM.DataSet(X_dataset, y_dataset, dataset_cols);
+            return NeuronLayerLSTM.DataSet(X_dataset, y_dataset, dataset_cols);
+
+    #-----------------------------------------------------------------------
+    # fromTensorLSTM(self, dataset, window = 64):
+    #-----------------------------------------------------------------------
+    # Poskladej vysledek vzdy z posledniho behu treninkove sady
+    # a vrat vysledek o rozmeru [0: (dataset.shape[0] - 1)] krat [0 : dataset.shape[2]]
+    # priklad: ma li tenzor rozmer 100 x 64 x 16, pak vrat vysledek [0:100-1], 64, [0,16-1]
+    # funkce vraci: y_result - 2D array vysledku predikce
+    #-----------------------------------------------------------------------
+    def fromTensorLSTM(dataset):
+        return(dataset[0 : (dataset.shape[0] - 1),  (dataset.shape[1] - 1) , 0 : dataset.shape[2]]);
+        
+            
 
     #-----------------------------------------------------------------------
     # toTensorGRU(self, dataset, window = 64):
@@ -387,7 +322,7 @@ class DataFactory():
     #               y_dataset - vektor vstupnich dat (model)
     #               dataset_cols - pocet sloupcu v datove sade. 
     #-----------------------------------------------------------------------
-    def toTensorGRU(dataset, window=64):
+    def toTensorGRU(dataset, window):
         
         X_dataset = []  #data pro tf.fit(x - data pro uceni
         y_dataset = []  #data pro tf.fit(y - vstupni data 
@@ -408,7 +343,21 @@ class DataFactory():
         
         X_dataset = np.reshape(X_dataset, (X_dataset.shape[0], X_dataset.shape[1], dataset_cols));
         
-        return NeuronLayerLSTM.DataSet(X_dataset, y_dataset, dataset_cols);
+        return NeuronLayerGRU.DataSet(X_dataset, y_dataset, dataset_cols);
+    
+
+    #-----------------------------------------------------------------------
+    # fromTensorGRU(self, dataset, window = 64):
+    #-----------------------------------------------------------------------
+    # Poskladej vysledek vzdy z posledniho behu treninkove sady
+    # a vrat vysledek o rozmeru [0: (dataset.shape[0] - 1)] krat [0 : dataset.shape[2]]
+    # priklad: ma li tenzor rozmer 100 x 64 x 16, pak vrat vysledek [0:100-1], 64, [0,16-1]
+    # funkce vraci: y_result - 2D array vysledku predikce
+    #-----------------------------------------------------------------------
+    def fromTensorGRU(dataset):
+        return(dataset[0 : (dataset.shape[0] - 1),  (dataset.shape[1] - 1) , 0 : dataset.shape[2]]);
+        
+    
     #---------------------------------------------------------------------------
     # DataFactory
     #---------------------------------------------------------------------------
@@ -418,32 +367,34 @@ class DataFactory():
         for i in self.df_parmX:
             df_parmX_predict[i] = self.df_parmX[i]+"_predict";
         i = 0;
-        for i in self.df_parmY:
-            df_parmY_predict[i] = self.df_parmY[i]+"_predict"; 
-        i = 0;
-        for i in self.df_parmX:
-            df_parmZ_predict[i] = self.df_parmZ[i]+"_predict"; 
              
 
     #---------------------------------------------------------------------------
     # setDataX(self, df,  size_train, size_valid, size_test)
     #---------------------------------------------------------------------------
-    def setDataX(self, df, df_test,  size_train, size_valid, size_test, txdt_b=False):
+    def setDataX(self, df, df_test,  size_train, size_valid, size_test, txdt_b=False, shuffling=False):
         #OSA X
         try:
 
-            DataTrain_x = self.DataTrainX;
+            DataTrain_x = self.DataTrain;
             DataTrain_x.train = pd.DataFrame(df[0 : size_train][self.df_parmX]);
             DataTrain_x.valid = pd.DataFrame(df[size_train+1 : size_train + size_valid][self.df_parmX]);
+            
+            if shuffling:
+                DataTrain_x.train = DataTrain_x.train.reset_index(drop=True)
+                DataTrain_x.train = shuffle(DataTrain_x.train)
+                DataTrain_x.train = DataTrain_x.train.reset_index(drop=True)
+                logging.info("--shuffle = True");
             
             if txdt_b:
                 DataTrain_x.test  = df_test;
             else:
                 DataTrain_x.test  = pd.DataFrame(df[ size_train + size_valid : size_train + size_valid + size_test ][self.df_parmX]);
+                logging.info("--shuffle = False");
                 
             DataTrain_x.df_parm_x = self.df_parmx;  # data na ose x, pro rovinu X
             DataTrain_x.df_parm_y = self.df_parmX;  # data na ose y, pro rovinu Y
-            DataTrain_x.axis = "OSA_X"
+            DataTrain_x.axis = "OSA_XYZ";
             return(DataTrain_x);
     
         except Exception as ex:
@@ -451,58 +402,6 @@ class DataFactory():
             logging.error(traceback.print_exc());
 
     
-    #---------------------------------------------------------------------------
-    # setDataY(self, df,  size_train, size_valid, size_test)
-    #---------------------------------------------------------------------------
-    def setDataY(self, df, df_test, size_train, size_valid, size_test, txdt_b=False):
-        #OSA Y
-        try:
-            
-            DataTrain_y = self.DataTrainY;
-            DataTrain_y.train = pd.DataFrame(df[0 : size_train][self.df_parmY]);
-            DataTrain_y.valid = pd.DataFrame(df[size_train+1 : size_train + size_valid][self.df_parmY])
-            DataTrain_y.test  = pd.DataFrame(df[ size_train + size_valid : size_train + size_valid + size_test ][self.df_parmY])
-
-            if txdt_b:
-                DataTrain_y.test  = df_test;
-            else:
-                DataTrain_y.test  = pd.DataFrame(df[ size_train + size_valid : size_train + size_valid + size_test ][self.df_parmY])
-
-            DataTrain_y.df_parm_x = self.df_parmy;  # data na ose x, pro rovinu Y
-            DataTrain_y.df_parm_y = self.df_parmY;  # data na ose y, pro rovinu Y
-            DataTrain_y.axis = "OSA_Y"
-            return(DataTrain_y);
-        
-        except Exception as ex:
-            traceback.print_exc();
-            logging.error(traceback.print_exc());
-
-    #---------------------------------------------------------------------------
-    # setDataZ(self, df,  size_train, size_valid, size_test)
-    #---------------------------------------------------------------------------
-    def setDataZ(self, df, df_test, size_train, size_valid, size_test, txdt_b=False):
-        #OSA Z
-        try:
-            
-
-            DataTrain_z = self.DataTrainZ;
-            DataTrain_z.train = pd.DataFrame(df[0 : size_train][self.df_parmZ]);
-            DataTrain_z.valid = pd.DataFrame(df[size_train+1 : size_train + size_valid][self.df_parmZ])
-            
-            if txdt_b:
-                DataTrain_z.test  = df_test;
-            else:    
-                DataTrain_z.test  = pd.DataFrame(df[ size_train + size_valid : size_train + size_valid + size_test ][self.df_parmZ])
-                
-            DataTrain_z.df_parm_x = self.df_parmz;  # data na ose x, pro rovinu Z
-            DataTrain_z.df_parm_y = self.df_parmZ;  # data na ose y, pro rovinu Z
-            DataTrain_z.axis = "OSA_Z"
-            return(DataTrain_z);
-        
-        except Exception as ex:
-            traceback.print_exc();
-            logging.error(traceback.print_exc());
-              
     #---------------------------------------------------------------------------
     # printGraf - kolekce dat         
     #---------------------------------------------------------------------------
@@ -518,21 +417,8 @@ class DataFactory():
     def getDf_parmx(self):
         return self.df_parmx;
     
-    def getDf_parmy(self):
-        return self.df_parmy;
-    
-    def getDf_parmz(self):
-        return self.df_parmz;
-        
     def getDf_parmX(self):
         return self.df_parmX;
-    
-    def getDf_parmY(self):
-        return self.df_parmY;
-    
-    def getDf_parmZ(self):
-        return self.df_parmZ;
-
 
 #---------------------------------------------------------------------------
 # MinimalRNNCell
@@ -566,10 +452,14 @@ class MinimalRNNCell(layers.Layer):
 #---------------------------------------------------------------------------
 class GraphResult():
 
-    def __init__(self, path_to_result, model, type):
+    def __init__(self, path_to_result, model, type, epochs, batch, txdat1, txdat2):
         self.path_to_result = path_to_result; 
         self.model = model; 
         self.type = type;
+        self.epochs = epochs;
+        self.batch = batch;
+        self.txdat1=txdat1;
+        self.txdat2=txdat2;
           
     #---------------------------------------------------------------------------
     # smoothGraph - trochu vyhlad graf
@@ -595,6 +485,7 @@ class GraphResult():
         df_merge = df.groupby(['out']).mean();
         df_result = df.merge(df_merge, how='inner', on='out');
         df_result['diff'] = df_result['out'] - df_result['out_predict_y'];
+        df_result['comp'] = (df_result['out_predict_y'] * -1);
         
         list_test   = df_result['out'];
         list_result = df_result['out_predict_y'];
@@ -615,13 +506,15 @@ class GraphResult():
         col_names_x="";
         str_inp1 = ""; 
         col =  0;
-        
+        number_of_samples = 0;
+        cmap = cm.get_cmap('winter') ;
+
         try:
             try:
                 axis = DataResult.axis
             except Exception as ex:
-                print("POZOR !!! Patrne chyba v souboru parametru ai-parms.txt ");
-                logging.error("POZOR !!! Patrne chyba v souboru parametru ai-parms.txt ");
+                print("POZOR !!! Patrne chyba v souboru parametru ai-parms2.txt ");
+                logging.error("POZOR !!! Patrne chyba v souboru parametru ai-parms2.txt ");
                 
         
             try:
@@ -637,7 +530,15 @@ class GraphResult():
                 str_inp1 += elem+",\n";
 
             for i in col_names_y:
-        # graf odchylek os X,Y 
+        # graf odchylek os X,Y
+
+                if "12" in col_names_y[col] or "x" in col_names_y[col]:
+                    axis="OSA_X"
+                if "13" in col_names_y[col] or "y" in col_names_y[col]:
+                    axis="OSA_Y"
+                if "14" in col_names_y[col] or "z" in col_names_y[col]:
+                    axis="OSA_Z"
+                        
                 
                 if ("MACH" in col_names_y[col].upper() or "DEV" in col_names_y[col].upper()):
                     df_graph = pd.DataFrame(DataResult.y_test[ : ,col]);
@@ -645,25 +546,40 @@ class GraphResult():
                     df_graph['out_predict'] = DataResult.y_result[ : , col];
                     
                     df_graph, mse, mae  = self.groupAvg(df_graph);
+                    number_of_samples = len(df_graph.index)
+                    
                     
                     max_axe = df_graph['out'].abs().max() * 2;
                     max_mae = df_graph['diff'].abs().max() * 3;
+
+                    
+                    
                 
-                    mpl.rcParams.update({'font.size': 6})
-                    ax = df_graph.plot(y=['out', 'out_predict_y'], kind='line', label=['realna data', 'predikce']);
+                    mpl.rcParams.update({'font.size': 6});
+                    ax = df_graph.plot(y=['out', 'out_predict_y', 'comp'] ,
+                                       kind='line',
+                                       label=['realna data', 'predikce', 'kompenzace'],
+                                       cmap=cmap
+                               );
+                    
                     ax.legend(title = self.model+' ' +axis+ 
                         '\nPath:\n' + self.path_to_result + 
                         '\nVst.:\n' + str_inp1 + 
                         '\nVyst:\n'     + col_names_y[col] +  
                         '\n\nMSE:'      + str(format(mse, '.9f')) + 
-                        '\nMAE:'        + str(format(mae, '.9f')),
-                        title_fontsize = 6,
-                        fontsize = 6
+                        '\nMAE:'        + str(format(mae, '.9f'))+
+                        '\ntxdat1:' + self.txdat1 + 
+                        '\ntxdat2:' + self.txdat2, 
+                        title_fontsize = 5,
+                        fontsize = 5
                     );
+                    ax.grid(which='both');
+                    ax.grid(which='minor', alpha=0.2);
+                    ax.grid(which='major', alpha=0.5);
                     ax.set_xlabel("vzorky")
                     ax.set_ylabel(col_names_y[col])
                     ax.set_ylim(-max_axe,+max_axe);
-                        
+                    
                     ax.get_figure().savefig(self.path_to_result+'/compare_'+col_names_y[col]+'-'+axis+'.pdf', format='pdf');
                     plt.close(ax.get_figure())
 
@@ -673,24 +589,30 @@ class GraphResult():
                     df_graph = df_graph.reset_index(drop=True)
                     
                     mpl.rcParams.update({'font.size': 6})
-                    ax = df_graph.plot(y=['diff'], kind='line', label=['realna - predikovana data']);
+                    ax = df_graph.plot(y=['diff'], kind='line', label=['realna - predikovana data'], grid=True);
                     ax.legend(title = self.model+' ' +axis+ 
                         '\nPath:\n' + self.path_to_result + 
                         '\nVst.:\n' + str_inp1 + 
                         '\nVyst:\n'     + col_names_y[col] +  
                         '\n\nMSE:'      + str(format(mse, '.9f')) + 
-                        '\nMAE:'        + str(format(mae, '.9f')),
-                        title_fontsize = 6,
-                        fontsize = 6
+                        '\nMAE:'        + str(format(mae, '.9f'))+
+                        '\ntxdat1:' + self.txdat1 + 
+                        '\ntxdat2:' + self.txdat2, 
+                        title_fontsize = 5,
+                        fontsize = 5
                         );
-                    ax.set_xlabel("vzorky")
-                    ax.set_ylabel(col_names_y[col])
+                    ax.grid(which='both');
+                    ax.grid(which='minor', alpha=0.2);
+                    ax.grid(which='major', alpha=0.5);
+                    ax.set_xlabel("vzorky");
+                    ax.set_ylabel(col_names_y[col]);
                     ax.set_ylim(-max_mae,+max_mae);
-                        
                     ax.get_figure().savefig(self.path_to_result+'/substract_'+col_names_y[col]+'-'+axis+'.pdf', format='pdf');
                     plt.close(ax.get_figure())
                     
-                self.saveToCSV(self.model, axis, col_names_y[col], str(format(mae, '.9f')), str(format(mse, '.9f')))
+                if substract and ("MACH" in col_names_y[col].upper() or "DEV" in col_names_y[col].upper()):
+                    self.saveToCSV(axis, col_names_y[col], str(format(mae, '.9f')), str(format(mse, '.9f')), str(number_of_samples));
+                    
                 col = col + 1;
                 
         except Exception as ex:
@@ -700,19 +622,24 @@ class GraphResult():
     #---------------------------------------------------------------------------
     # printGraf - kolekce dat         
     #---------------------------------------------------------------------------
-    def saveToCSV(self, model, axis, plcname, mae, mse):
+    def saveToCSV(self, axis, plcname, mae, mse, number_of_samples):
         
-        header = ["datetime", "model", "axis", "plcname", "mae", "mse", "type"];
-        filename = "./result/result_csv.csv"
-        
-        data = {'datetime'   : [self.path_to_result],
-                   'model'   : [model],
-                   'axis'    : [axis],
-                   'plcname' : [plcname],
-                   'mae'     : [mae],
-                   'mse'     : [mse],
-                   'type'    : [self.type]
-                }
+        header = ["result", "axis", "plcname", "type", "model", "epochs", "batch", "mae", "mse", "number_of_samples", "txdat1", "txdat2"];
+        filename = "./result/result.csv"
+       
+        data = {"result"             : [self.path_to_result],
+                "axis"               : [axis],
+                "plcname"            : [plcname],
+                "type"               : [self.type],
+                "model"              : [self.model],
+                "epochs"             : [self.epochs],
+                "batch"              : [self.batch],
+                "mae"                : [mae],
+                "mse"                : [mse],
+                "number_of_samples"  : [number_of_samples],
+                "txdat1"             : [self.txdat1],
+                "txdat2"             : [self.txdat2]
+            }
 
         try:
         
@@ -748,7 +675,7 @@ class NeuronLayerDENSE():
         y_dataset: object              #vstupni data
         cols:      int                 #pocet sloupcu v datove sade
 
-    def __init__(self, path_to_result, typ, model, epochs, batch, txdat1, txdat2):
+    def __init__(self, path_to_result, typ, model, epochs, batch, txdat1, txdat2, window, units=256, shuffling=True):
         
         self.path_to_result = path_to_result; 
         self.typ = typ;
@@ -762,6 +689,9 @@ class NeuronLayerDENSE():
         self.df_out = pd.DataFrame();
         self.graph = None;
         self.data  = None;
+        self.window = window;
+        self.units = units;
+        self.shuffling = shuffling;
 
         
     #---------------------------------------------------------------------------
@@ -795,9 +725,9 @@ class NeuronLayerDENSE():
         # neuronova sit
             model = Sequential();
             model.add(tf.keras.Input(shape=(inp_size,)));
-            model.add(layers.Dense(1024, activation='sigmoid', kernel_initializer='he_normal'))
-            model.add(layers.Dense(1024, activation='sigmoid', kernel_initializer='he_normal'))
-            model.add(layers.Dense(1024, activation='sigmoid', kernel_initializer='he_normal'))
+            model.add(layers.Dense(units=self.units, activation='sigmoid', kernel_initializer='he_normal'))
+            model.add(layers.Dense(units=self.units, activation='sigmoid', kernel_initializer='he_normal'))
+            model.add(layers.Dense(units=self.units, activation='sigmoid', kernel_initializer='he_normal'))
             model.add(layers.Dense(out_size))
             
         # definice ztratove funkce a optimalizacniho algoritmu
@@ -901,89 +831,28 @@ class NeuronLayerDENSE():
             startTime = datetime.now();
             model_x = ''
             if self.typ == 'train':
-                print("Start osy X vcetne treninku, model bude zapsan");
-                logging.info("Start osy X vcetne treninku, model bude zapsan");
-                model_x = self.neuralNetworkDENSEtrain(data.DataTrainDim.DataTrainX);
+                print("Start os XYZ vcetne treninku, model bude zapsan");
+                logging.info("Start os XYZ vcetne treninku, model bude zapsan");
+                model_x = self.neuralNetworkDENSEtrain(data.DataTrainDim.DataTrain);
             else:    
-                print("Start osy X bez treninku - model bude nacten");
-                logging.info("Start osy X bez treninku - model bude nacten");
-                model_x = load_model('./models/model_'+self.model+'_'+ data.DataTrainDim.DataTrainX.axis);
+                print("Start os XYZ bez treninku - model bude nacten");
+                logging.info("Start os XYZ bez treninku - model bude nacten");
+                model_x = load_model('./models/model_'+self.model+'_'+ data.DataTrainDim.DataTrain.axis);
             
-            data.DataResultDim.DataResultX = self.neuralNetworkDENSEpredict(model_x, data.DataTrainDim.DataTrainX);
-            graph.printGrafCompare(data.DataResultDim.DataResultX, data.DataTrainDim.DataTrainX);
+            data.DataResultDim.DataResultX = self.neuralNetworkDENSEpredict(model_x, data.DataTrainDim.DataTrain);
+            graph.printGrafCompare(data.DataResultDim.DataResultX, data.DataTrainDim.DataTrain);
             stopTime = datetime.now();
             logging.info("cas vypoctu - osa X [s] %s",  str(stopTime - startTime));
 
             return();
 
         except FileNotFoundError as e:
-            print(f"Nenalezen model site pro osu X, zkuste nejdrive spustit s parametem train !!!\n" f"{e}");    
-            logging.error(f"Nenalezen model site pro osu X, zkuste nejdrive spustit s parametem train !!!\n" f"{e}");
+            print(f"Nenalezen model site, zkuste nejdrive spustit s parametem train !!!\n" f"{e}");    
+            logging.error(f"Nenalezen model, zkuste nejdrive spustit s parametem train !!!\n" f"{e}");
         except Exception as ex:
             traceback.print_exc();
             logging.error(traceback.print_exc());
             
-    #---------------------------------------------------------------------------
-    # neuralNetworkDENSEexec_y 
-    #---------------------------------------------------------------------------
-    def neuralNetworkDENSEexec_y(self, data, graph):
-        try:
-            
-            startTime = datetime.now();
-            model_y = '';
-            if self.typ == 'train':
-                print("Start osy Y vcetne treninku model bude zapsan");
-                logging.info("Start osy Y vcetne treninku, model bude zapsan");
-                model_y = self.neuralNetworkDENSEtrain(data.DataTrainDim.DataTrainY);
-            else:    
-                print("Start osy Y bez treninku - model bude nacten");
-                logging.info("Start osy Y bez treninku - model bude nacten");
-                model_y = load_model('./models/model_'+self.model+'_'+ data.DataTrainDim.DataTrainY.axis);
-                
-            data.DataResultDim.DataResultY = self.neuralNetworkDENSEpredict(model_y, data.DataTrainDim.DataTrainY);
-            graph.printGrafCompare(data.DataResultDim.DataResultY, data.DataTrainDim.DataTrainY);
-            stopTime = datetime.now();
-            logging.info("cas vypoctu - osa Y [s] %s",  str(stopTime - startTime));
-            
-            return();
-
-        except FileNotFoundError as e:
-            print(f"Nenalezen model site pro osu Y zkuste nejdrive spustit s parametem train !!!\n" f"{e}");    
-            logging.error(f"Nenalezen model site pro osu Y , zkuste nejdrive spustit s parametem train !!!\n" f"{e}");    
-
-        except Exception as ex:
-            traceback.print_exc();
-            logging.error(traceback.print_exc());
-
-    #---------------------------------------------------------------------------
-    # neuralNetworkDENSEexec_z 
-    #---------------------------------------------------------------------------
-    def neuralNetworkDENSEexec_z(self, data, graph):
-        try:
-            startTime = datetime.now()
-            
-            model_z = ''
-            if self.typ == 'train':
-                print("Start osy Z vcetne treninku, model bude zapsan");
-                logging.info("Start osy Z vcetne treninku, model bude zapsan");
-                model_z = self.neuralNetworkDENSEtrain(data.DataTrainDim.DataTrainZ);
-            else:    
-                print("Start osy Z bez treninku - model bude nacten");
-                logging.info("Start osy Z bez treninku - model bude nacten");
-                model_z = load_model('./models/model_'+self.model+'_'+ data.DataTrainDim.DataTrainZ.axis);
-                
-            data.DataResultDim.DataResultZ = self.neuralNetworkDENSEpredict(model_z, data.DataTrainDim.DataTrainZ);
-            graph.printGrafCompare(data.DataResultDim.DataResultZ, data.DataTrainDim.DataTrainZ);
-            stopTime = datetime.now();
-            logging.info("cas vypoctu - osa Z [s] %s",  str(stopTime - startTime));
-            
-        except FileNotFoundError as e:
-            print(f"Nenalezen model site pro osu Y zkuste nejdrive spustit s parametem train !!!\n" f"{e}");    
-            logging.error(f"Nenalezen model site pro osu Y , zkuste nejdrive spustit s parametem train !!!\n" f"{e}");    
-        except FileNotFoundError as e:
-            print(f"Nenalezen model site pro osu Y zkuste nejdrive spustit s parametem train !!!\n" f"{e}");    
-            logging.error(f"Nenalezen model site pro osu Y , zkuste nejdrive spustit s parametem train !!!\n" f"{e}");    
-
     #------------------------------------------------------------------------
     # neuralNetworkDENSEexec
     #------------------------------------------------------------------------
@@ -991,36 +860,28 @@ class NeuronLayerDENSE():
 
         try:
             print("Pocet GPU jader: ", len(tf.config.experimental.list_physical_devices('GPU')))
-            self.data = DataFactory(path_to_result=self.path_to_result)
-            self.graph = GraphResult(path_to_result=self.path_to_result, model=self.model, type=self.typ)
+            self.data = DataFactory(path_to_result=self.path_to_result, window=self.window);
+            self.graph = GraphResult(path_to_result=self.path_to_result, 
+                                     model=self.model, 
+                                     type=self.typ,
+                                     epochs = self.epochs,
+                                     batch = self.batch,
+                                     txdat1 = self.txdat1,
+                                     txdat2 = self.txdat2
+                                );
         
-            shuffling = False;
-            if self.typ == 'train':
-                shuffling = True;
+            if self.typ == 'predict':
+                self.shuffling = False;
         
-            self.data.Data = self.data.getData(shuffling=shuffling, timestamp_start=self.txdat1, timestamp_stop=self.txdat2);
+            self.data.Data = self.data.getData(shuffling=self.shuffling, timestamp_start=self.txdat1, timestamp_stop=self.txdat2);
 
     # osa X    
-            if self.data.DataTrainDim.DataTrainX  == None:
+            if self.data.DataTrainDim.DataTrain  == None:
                 print("Osa X je disable...");
                 logging.info("Osa X je disable...");
             else:
                 self.neuralNetworkDENSEexec_x(data=self.data, graph=self.graph);
             
-    # osa Y    
-            if self.data.DataTrainDim.DataTrainY  == None:
-                print("Osa Y je disable...");
-                logging.info("Osa Y je disable...");
-            else:
-                self.neuralNetworkDENSEexec_y(data=self.data, graph=self.graph);
-        
-    # osa Z    
-            if self.data.DataTrainDim.DataTrainZ  == None:
-                print("Osa Z je disable...");
-                logging.info("Osa Z je disable...");
-            else:
-                self.neuralNetworkDENSEexec_z(data=self.data, graph=self.graph);
-
     # archivuj vyrobeny model site            
             if self.typ == 'train':
                 saveModelToArchiv(model="DENSE", dest_path=self.path_to_result, data=self.data);
@@ -1045,7 +906,7 @@ class NeuronLayerLSTM():
         y_dataset: object              #vstupni data
         cols:      int                 #pocet sloupcu v datove sade
 
-    def __init__(self, path_to_result, typ, model, epochs, batch, txdat1, txdat2):
+    def __init__(self, path_to_result, typ, model, epochs, batch, txdat1, txdat2, window, units=256, shuffling=True):
         
         self.path_to_result = path_to_result; 
         self.typ = typ;
@@ -1059,12 +920,15 @@ class NeuronLayerLSTM():
         self.df_out = pd.DataFrame()
         self.graph = None;
         self.data  = None;
-        
+        self.window = window;
+        self.units  = units;
+        self.shuffling = shuffling;
+
     #---------------------------------------------------------------------------
-    # Neuronova Vrstava LSTM 
+    # Neuronova Vrstava LSTM
     #---------------------------------------------------------------------------
     def neuralNetworkLSTMtrain(self, DataTrain):
-        window_X = 64;
+        window_X = self.window;
         window_Y =  1;
         
         try:
@@ -1089,24 +953,24 @@ class NeuronLayerLSTM():
             y_valid = y_valid.fit_transform(y_valid_data);
         
         #data pro trenink -3D tenzor
-            X_train =  DataFactory.toTensorLSTM(x_train, window=window_X);
+            X_train =  DataFactory.toTensorGRU(x_train, window=window_X);
         #vstupni data train 
-            Y_train = DataFactory.toTensorLSTM(y_train, window=window_Y);
+            Y_train = DataFactory.toTensorGRU(y_train, window=window_Y);
             Y_train.X_dataset = Y_train.X_dataset[0 : X_train.X_dataset.shape[0]];
         #data pro validaci -3D tenzor
-            X_valid = DataFactory.toTensorLSTM(x_valid, window=window_X);
+            X_valid = DataFactory.toTensorGRU(x_valid, window=window_X);
         #vystupni data pro trenink -3D tenzor
-            Y_valid = DataFactory.toTensorLSTM(y_valid, window=window_Y);
+            Y_valid = DataFactory.toTensorGRU(y_valid, window=window_Y);
             Y_valid.X_dataset = Y_valid.X_dataset[0 : X_valid.X_dataset.shape[0]];
             
         # neuronova sit
             model = Sequential();
             model.add(Input(shape=(X_train.X_dataset.shape[1], X_train.cols,)));
-            model.add(LSTM(units = 1024, return_sequences=True));
+            model.add(LSTM(units = self.units, return_sequences=True));
             model.add(Dropout(0.2));
-            model.add(LSTM(units = 1024, return_sequences=True));
-            model.add(Dropout(0.25));
-            model.add(LSTM(units = 1024, return_sequences=True));
+            model.add(LSTM(units = self.units, return_sequences=True));
+            model.add(Dropout(0.2));
+            model.add(LSTM(units = self.units, return_sequences=True));
             model.add(layers.Dense(Y_train.cols, activation='relu'));
 
         # definice ztratove funkce a optimalizacniho algoritmu
@@ -1117,8 +981,8 @@ class NeuronLayerLSTM():
                                 epochs=self.epochs, 
                                 batch_size=self.batch, 
                                 verbose=2, 
-                                validation_data=(X_valid.X_dataset, Y_valid.X_dataset),
-                                shuffle=False
+                                validation_data=(X_valid.X_dataset,
+                                                 Y_valid.X_dataset)
                             );
 
         # start point grafu - kolik se vynecha na zacatku
@@ -1162,9 +1026,11 @@ class NeuronLayerLSTM():
             traceback.print_exc();
             logging.error(traceback.print_exc());
         
+        
     #---------------------------------------------------------------------------
-    # Neuronova Vrstava DENSE predict 
+    # Neuronova Vrstava LSTM predict 
     #---------------------------------------------------------------------------
+
     def neuralNetworkLSTMpredict(self, model, DataTrain):
 
         try:
@@ -1179,15 +1045,10 @@ class NeuronLayerLSTM():
             y_test_scaler = MinMaxScaler(feature_range=(0, 1));
             y_test        = y_test_scaler.fit_transform(y_test);
             
-            x_object      = DataFactory.toTensorLSTM(x_test, window=64);
+            x_object      = DataFactory.toTensorGRU(x_test, window=self.window);
             dataset_rows, dataset_cols = x_test.shape;
-        # predict
-            y_result      = model.predict(x_object.X_dataset);
-        
-        # reshape 3d na 2d  
-        # vezmi (y_result.shape[1] - 1) - posledni ramec vysledku - nejlepsi mse i mae
-            y_result      = y_result[0 : (y_result.shape[0] - 1),  (y_result.shape[1] - 1) , 0 : y_result.shape[2]];
-        
+        # predict result
+            y_result      = DataFactory.fromTensorLSTM(model.predict(x_object.X_dataset));
             y_test        = y_test[ : len(y_result)]
             x_test        = x_test_scaler.inverse_transform(x_test);
             y_test        = y_test_scaler.inverse_transform(y_test);
@@ -1202,6 +1063,8 @@ class NeuronLayerLSTM():
             traceback.print_exc();
             logging.error(traceback.print_exc());
 
+            
+
     #---------------------------------------------------------------------------
     # neuralNetworkLSTMexec_x 
     #---------------------------------------------------------------------------
@@ -1213,14 +1076,14 @@ class NeuronLayerLSTM():
             if self.typ == 'train':
                 print("Start osy X vcetne treninku, model bude zapsan");
                 logging.info("Start osy X vcetne treninku, model bude zapsan");
-                model_x = self.neuralNetworkLSTMtrain(data.DataTrainDim.DataTrainX);
+                model_x = self.neuralNetworkLSTMtrain(data.DataTrainDim.DataTrain);
             else:    
                 print("Start osy X bez treninku - model bude nacten");
                 logging.info("Start osy X bez treninku - model bude nacten");
-                model_x = load_model('./models/model_'+self.model+'_'+ data.DataTrainDim.DataTrainX.axis);
+                model_x = load_model('./models/model_'+self.model+'_'+ data.DataTrainDim.DataTrain.axis);
             
-            data.DataResultDim.DataResultX = self.neuralNetworkLSTMpredict(model_x, data.DataTrainDim.DataTrainX);
-            graph.printGrafCompare(data.DataResultDim.DataResultX, data.DataTrainDim.DataTrainX);
+            data.DataResultDim.DataResultX = self.neuralNetworkLSTMpredict(model_x, data.DataTrainDim.DataTrain);
+            graph.printGrafCompare(data.DataResultDim.DataResultX, data.DataTrainDim.DataTrain);
             stopTime = datetime.now();
             logging.info("cas vypoctu - osa X [s] %s",  str(stopTime - startTime));
             return(0);        
@@ -1233,70 +1096,6 @@ class NeuronLayerLSTM():
             traceback.print_exc();
             logging.error(traceback.print_exc());
 
-    #---------------------------------------------------------------------------
-    # neuralNetworkLSTMexec_y 
-    #---------------------------------------------------------------------------
-    def neuralNetworkLSTMexec_y(self, data, graph):
-        try:
-            
-            startTime = datetime.now();
-            model_y = '';
-            if self.typ == 'train':
-                print("Start osy Y vcetne treninku model bude zapsan");
-                logging.info("Start osy Y vcetne treninku, model bude zapsan");
-                model_y = self.neuralNetworkLSTMtrain(data.DataTrainDim.DataTrainY);
-            else:    
-                print("Start osy Y bez treninku - model bude nacten");
-                logging.info("Start osy Y bez treninku - model bude nacten");
-                model_y = load_model('./models/model_'+self.model+'_'+ data.DataTrainDim.DataTrainY.axis);
-                
-            data.DataResultDim.DataResultY = self.neuralNetworkLSTMpredict(model_y, data.DataTrainDim.DataTrainY);
-            graph.printGrafCompare(data.DataResultDim.DataResultY, data.DataTrainDim.DataTrainY);
-            stopTime = datetime.now();
-            logging.info("cas vypoctu - osa Y [s] %s",  str(stopTime - startTime));
-            return(0);
-
-        except FileNotFoundError as e:
-            print(f"Nenalezen model site pro osu Y zkuste nejdrive spustit s parametem train !!!\n" f"{e}");    
-            logging.error(f"Nenalezen model site pro osu Y , zkuste nejdrive spustit s parametem train !!!\n" f"{e}");    
-            
-        except Exception as ex:
-            traceback.print_exc();
-            logging.error(traceback.print_exc());
-
-
-    #---------------------------------------------------------------------------
-    # neuralNetworkLSTMexec_z 
-    #---------------------------------------------------------------------------
-    def neuralNetworkLSTMexec_z(self, data, graph):
-        try:
-            startTime = datetime.now()
-            
-            model_z = ''
-            if self.typ == 'train':
-                print("Start osy Z vcetne treninku, model bude zapsan");
-                logging.info("Start osy Z vcetne treninku, model bude zapsan");
-                model_z = self.neuralNetworkLSTMtrain(data.DataTrainDim.DataTrainZ);
-            else:    
-                print("Start osy Z bez treninku - model bude nacten");
-                logging.info("Start osy Z bez treninku - model bude nacten");
-                model_z = load_model('./models/model_'+self.model+'_'+ data.DataTrainDim.DataTrainZ.axis);
-                
-            data.DataResultDim.DataResultZ = self.neuralNetworkLSTMpredict(model_z, data.DataTrainDim.DataTrainZ);
-            graph.printGrafCompare(data.DataResultDim.DataResultZ, data.DataTrainDim.DataTrainZ);
-            stopTime = datetime.now();
-            logging.info("cas vypoctu - osa Z [s] %s",  str(stopTime - startTime));
-            return(0);
-            
-        except FileNotFoundError as e:
-            print(f"Nenalezen model site pro osu Y zkuste nejdrive spustit s parametem train !!!\n" f"{e}");    
-            logging.error(f"Nenalezen model site pro osu Y , zkuste nejdrive spustit s parametem train !!!\n" f"{e}");    
-
-        except Exception as ex:
-            traceback.print_exc();
-            logging.error(traceback.print_exc());
-
-
     #------------------------------------------------------------------------
     # neuralNetworkLSTMexec
     #------------------------------------------------------------------------
@@ -1304,35 +1103,29 @@ class NeuronLayerLSTM():
         
         try:
             print("Pocet GPU jader: ", len(tf.config.experimental.list_physical_devices('GPU')))
-            self.data = DataFactory(path_to_result=self.path_to_result)
-            self.graph = GraphResult(path_to_result=self.path_to_result, model=self.model, type=self.typ)
+            self.data = DataFactory(path_to_result=self.path_to_result, window=self.window)
+            self.graph = GraphResult(path_to_result=self.path_to_result, 
+                                     model=self.model, 
+                                     type=self.typ,
+                                     epochs = self.epochs,
+                                     batch = self.batch,
+                                     txdat1 = self.txdat1,
+                                     txdat2 = self.txdat2
+                                );
         
             shuffling = False;
-            if self.typ == 'train':
-                shuffling = True;
+            if self.typ == 'predict':
+                self.shuffling = False;
         
-            self.data.Data = self.data.getData(shuffling=shuffling, timestamp_start=self.txdat1, timestamp_stop=self.txdat2);
+            self.data.Data = self.data.getData(shuffling=self.shuffling, timestamp_start=self.txdat1, timestamp_stop=self.txdat2);
 
     # osa X    
-            if self.data.DataTrainDim.DataTrainX  == None:
+            if self.data.DataTrainDim.DataTrain  == None:
                 print("Osa X je disable...");
                 logging.info("Osa X je disable...");
             else:
                 self.neuralNetworkLSTMexec_x(data=self.data, graph=self.graph);
             
-    # osa Y    
-            if self.data.DataTrainDim.DataTrainY  == None:
-                print("Osa Y je disable...");
-                logging.info("Osa Y je disable...");
-            else:
-                self.neuralNetworkLSTMexec_y(data=self.data, graph=self.graph);
-        
-    # osa Z    
-            if self.data.DataTrainDim.DataTrainZ  == None:
-                print("Osa Z je disable...");
-                logging.info("Osa Z je disable...");
-            else:
-                self.neuralNetworkLSTMexec_z(data=self.data, graph=self.graph);
         
     # archivuj vyrobeny model site            
             if self.typ == 'train':
@@ -1359,7 +1152,7 @@ class NeuronLayerGRU():
         y_dataset: object              #vstupni data
         cols:      int                 #pocet sloupcu v datove sade
 
-    def __init__(self, path_to_result, typ, model, epochs, batch, txdat1, txdat2):
+    def __init__(self, path_to_result, typ, model, epochs, batch, txdat1, txdat2, window, units=256, shuffling=True):
         
         self.path_to_result = path_to_result; 
         self.typ = typ;
@@ -1373,12 +1166,15 @@ class NeuronLayerGRU():
         self.df_out = pd.DataFrame()
         self.graph = None;
         self.data  = None;
+        self.window = window;
+        self.units = units;
+        self.shuffling = shuffling;
         
     #---------------------------------------------------------------------------
     # Neuronova Vrstava GRU 
     #---------------------------------------------------------------------------
     def neuralNetworkGRUtrain(self, DataTrain):
-        window_X = 64;
+        window_X = self.window;
         window_Y =  1;
         
         try:
@@ -1416,11 +1212,11 @@ class NeuronLayerGRU():
         # neuronova sit
             model = Sequential();
             model.add(Input(shape=(X_train.X_dataset.shape[1], X_train.cols,)));
-            model.add(GRU(units = 1024, return_sequences=True));
+            model.add(GRU(units = 512, return_sequences=True));
             model.add(Dropout(0.2));
             model.add(GRU(units = 1024, return_sequences=True));
             model.add(Dropout(0.2));
-            model.add(GRU(units = 1024, return_sequences=True));
+            model.add(GRU(units = 512, return_sequences=True));
             model.add(layers.Dense(Y_train.cols, activation='relu'));
 
         # definice ztratove funkce a optimalizacniho algoritmu
@@ -1431,8 +1227,8 @@ class NeuronLayerGRU():
                                 epochs=self.epochs, 
                                 batch_size=self.batch, 
                                 verbose=2, 
-                                validation_data=(X_valid.X_dataset, Y_valid.X_dataset),
-                                shuffle=False
+                                validation_data=(X_valid.X_dataset,
+                                                 Y_valid.X_dataset)
                             );
 
         # start point grafu - kolik se vynecha na zacatku
@@ -1493,15 +1289,10 @@ class NeuronLayerGRU():
             y_test_scaler = MinMaxScaler(feature_range=(0, 1));
             y_test        = y_test_scaler.fit_transform(y_test);
             
-            x_object      = DataFactory.toTensorGRU(x_test, window=64);
+            x_object      = DataFactory.toTensorGRU(x_test, window=self.window);
             dataset_rows, dataset_cols = x_test.shape;
-        # predict
-            y_result      = model.predict(x_object.X_dataset);
-        
-        # reshape 3d na 2d  
-        # vezmi (y_result.shape[1] - 1) - posledni ramec vysledku - nejlepsi mse i mae
-            y_result      = y_result[0 : (y_result.shape[0] - 1),  (y_result.shape[1] - 1) , 0 : y_result.shape[2]];
-        
+        # predict result
+            y_result      = DataFactory.fromTensorGRU(model.predict(x_object.X_dataset));
             y_test        = y_test[ : len(y_result)]
             x_test        = x_test_scaler.inverse_transform(x_test);
             y_test        = y_test_scaler.inverse_transform(y_test);
@@ -1527,14 +1318,14 @@ class NeuronLayerGRU():
             if self.typ == 'train':
                 print("Start osy X vcetne treninku, model bude zapsan");
                 logging.info("Start osy X vcetne treninku, model bude zapsan");
-                model_x = self.neuralNetworkGRUtrain(data.DataTrainDim.DataTrainX);
+                model_x = self.neuralNetworkGRUtrain(data.DataTrainDim.DataTrain);
             else:    
                 print("Start osy X bez treninku - model bude nacten");
                 logging.info("Start osy X bez treninku - model bude nacten");
-                model_x = load_model('./models/model_'+self.model+'_'+ data.DataTrainDim.DataTrainX.axis);
+                model_x = load_model('./models/model_'+self.model+'_'+ data.DataTrainDim.DataTrain.axis);
             
-            data.DataResultDim.DataResultX = self.neuralNetworkGRUpredict(model_x, data.DataTrainDim.DataTrainX);
-            graph.printGrafCompare(data.DataResultDim.DataResultX, data.DataTrainDim.DataTrainX);
+            data.DataResultDim.DataResultX = self.neuralNetworkGRUpredict(model_x, data.DataTrainDim.DataTrain);
+            graph.printGrafCompare(data.DataResultDim.DataResultX, data.DataTrainDim.DataTrain);
             stopTime = datetime.now();
             logging.info("cas vypoctu - osa X [s] %s",  str(stopTime - startTime));
             return(0);        
@@ -1547,70 +1338,6 @@ class NeuronLayerGRU():
             traceback.print_exc();
             logging.error(traceback.print_exc());
 
-    #---------------------------------------------------------------------------
-    # neuralNetworkGRUexec_y 
-    #---------------------------------------------------------------------------
-    def neuralNetworkGRUexec_y(self, data, graph):
-        try:
-            
-            startTime = datetime.now();
-            model_y = '';
-            if self.typ == 'train':
-                print("Start osy Y vcetne treninku model bude zapsan");
-                logging.info("Start osy Y vcetne treninku, model bude zapsan");
-                model_y = self.neuralNetworkGRUtrain(data.DataTrainDim.DataTrainY);
-            else:    
-                print("Start osy Y bez treninku - model bude nacten");
-                logging.info("Start osy Y bez treninku - model bude nacten");
-                model_y = load_model('./models/model_'+self.model+'_'+ data.DataTrainDim.DataTrainY.axis);
-                
-            data.DataResultDim.DataResultY = self.neuralNetworkGRUpredict(model_y, data.DataTrainDim.DataTrainY);
-            graph.printGrafCompare(data.DataResultDim.DataResultY, data.DataTrainDim.DataTrainY);
-            stopTime = datetime.now();
-            logging.info("cas vypoctu - osa Y [s] %s",  str(stopTime - startTime));
-            return(0);
-
-        except FileNotFoundError as e:
-            print(f"Nenalezen model site pro osu Y zkuste nejdrive spustit s parametem train !!!\n" f"{e}");    
-            logging.error(f"Nenalezen model site pro osu Y , zkuste nejdrive spustit s parametem train !!!\n" f"{e}");    
-            
-        except Exception as ex:
-            traceback.print_exc();
-            logging.error(traceback.print_exc());
-
-
-    #---------------------------------------------------------------------------
-    # neuralNetworkGRUexec_z 
-    #---------------------------------------------------------------------------
-    def neuralNetworkGRUexec_z(self, data, graph):
-        try:
-            startTime = datetime.now()
-            
-            model_z = ''
-            if self.typ == 'train':
-                print("Start osy Z vcetne treninku, model bude zapsan");
-                logging.info("Start osy Z vcetne treninku, model bude zapsan");
-                model_z = self.neuralNetworkGRUtrain(data.DataTrainDim.DataTrainZ);
-            else:    
-                print("Start osy Z bez treninku - model bude nacten");
-                logging.info("Start osy Z bez treninku - model bude nacten");
-                model_z = load_model('./models/model_'+self.model+'_'+ data.DataTrainDim.DataTrainZ.axis);
-                
-            data.DataResultDim.DataResultZ = self.neuralNetworkGRUpredict(model_z, data.DataTrainDim.DataTrainZ);
-            graph.printGrafCompare(data.DataResultDim.DataResultZ, data.DataTrainDim.DataTrainZ);
-            stopTime = datetime.now();
-            logging.info("cas vypoctu - osa Z [s] %s",  str(stopTime - startTime));
-            return(0);
-            
-        except FileNotFoundError as e:
-            print(f"Nenalezen model site pro osu Y zkuste nejdrive spustit s parametem train !!!\n" f"{e}");    
-            logging.error(f"Nenalezen model site pro osu Y , zkuste nejdrive spustit s parametem train !!!\n" f"{e}");    
-
-        except Exception as ex:
-            traceback.print_exc();
-            logging.error(traceback.print_exc());
-
-
     #------------------------------------------------------------------------
     # neuralNetworkGRUexec
     #------------------------------------------------------------------------
@@ -1618,35 +1345,29 @@ class NeuronLayerGRU():
         
         try:
             print("Pocet GPU jader: ", len(tf.config.experimental.list_physical_devices('GPU')))
-            self.data = DataFactory(path_to_result=self.path_to_result)
-            self.graph = GraphResult(path_to_result=self.path_to_result, model=self.model, type=self.typ)
+            self.data = DataFactory(path_to_result=self.path_to_result, window=self.window);
+            self.graph = GraphResult(path_to_result=self.path_to_result, 
+                                     model=self.model, 
+                                     type=self.typ,
+                                     epochs = self.epochs,
+                                     batch = self.batch,
+                                     txdat1 = self.txdat1,
+                                     txdat2 = self.txdat2
+                                );
         
             shuffling = False;
-            if self.typ == 'train':
-                shuffling = True;
+            if self.typ == 'predict':
+                self.shuffling = False;
         
-            self.data.Data = self.data.getData(shuffling=shuffling, timestamp_start=self.txdat1, timestamp_stop=self.txdat2);
+            self.data.Data = self.data.getData(shuffling=self.shuffling, timestamp_start=self.txdat1, timestamp_stop=self.txdat2);
 
     # osa X    
-            if self.data.DataTrainDim.DataTrainX  == None:
+            if self.data.DataTrainDim.DataTrain  == None:
                 print("Osa X je disable...");
                 logging.info("Osa X je disable...");
             else:
                 self.neuralNetworkGRUexec_x(data=self.data, graph=self.graph);
             
-    # osa Y    
-            if self.data.DataTrainDim.DataTrainY  == None:
-                print("Osa Y je disable...");
-                logging.info("Osa Y je disable...");
-            else:
-                self.neuralNetworkGRUexec_y(data=self.data, graph=self.graph);
-        
-    # osa Z    
-            if self.data.DataTrainDim.DataTrainZ  == None:
-                print("Osa Z je disable...");
-                logging.info("Osa Z je disable...");
-            else:
-                self.neuralNetworkGRUexec_z(data=self.data, graph=self.graph);
         
     # archivuj vyrobeny model site            
             if self.typ == 'train':
@@ -1660,23 +1381,16 @@ class NeuronLayerGRU():
 
 
 
-
-
-
-
-
-
-
 #------------------------------------------------------------------------
 # saveModelToArchiv - zaloha modelu, spusteno jen pri parametru train
 #------------------------------------------------------------------------
 def saveModelToArchiv(model, dest_path, data):
 
-    axes = np.array(["OSA_X", "OSA_Y", "OSA_Z"]);
+    axes = np.array([data.DataTrainDim.DataTrain.axis]);
     src_dir  = "./models/model_"+model+"_";
     dest_dir = "/models/model_"+model+"_";
     try:
-        if data.DataTrainDim.DataTrainX  == None:
+        if data.DataTrainDim.DataTrain  == None:
             print()
         else:    
             src_dir_  = src_dir + axes[0]
@@ -1684,22 +1398,6 @@ def saveModelToArchiv(model, dest_path, data):
             files = os.listdir(src_dir_)
             shutil.copytree(src_dir_, dest_dir_)
             
-        if data.DataTrainDim.DataTrainY  == None:
-            print()
-        else:    
-            src_dir_  = src_dir + axes[1]
-            dest_dir_ = dest_path + dest_dir + axes[1]
-            files = os.listdir(src_dir_)
-            shutil.copytree(src_dir_, dest_dir_)
-         
-        if data.DataTrainDim.DataTrainZ  == None:
-            print()
-        else:    
-            src_dir_  = src_dir + axes[2]
-            dest_dir_ = dest_path + dest_dir + axes[2]
-            files = os.listdir(src_dir_)
-            shutil.copytree(src_dir_, dest_dir_)
-         
         return(0);    
    
     except Exception as ex:
@@ -1710,12 +1408,13 @@ def saveModelToArchiv(model, dest_path, data):
 #------------------------------------------------------------------------
 # setEnv
 #------------------------------------------------------------------------
-def setEnv(path, model):
+def setEnv(path, model, type, parms):
 
         progname = os.path.basename(__file__);
         current_date =  datetime.now().strftime("%Y-%m-%d_%H:%M:%S");
-        path1 = path+model
-        path2 = path+model+"/"+current_date
+        path1 = path+model+"_3D";
+        path2 = path1+"/"+current_date+"_"+type
+                
         
         try: 
             os.mkdir("./log");
@@ -1757,15 +1456,23 @@ def setEnv(path, model):
         try:
             shutil.copy("ai-parms.txt", path2+"/src");
         except shutil.SpecialFileError as error:
-            print("Chyba pri kopii zdrojoveho kodu.", error)
+            print("Chyba pri kopii ai-parms.txt.", error)
         except:
-            print("Chyba pri kopii zdrojoveho kodu.")
+            print("Chyba pri kopii ai-parms.txt.")
+            
+            
+        try:
+            print(parms,  file=open( path2+"/src/parms.txt", "w"))    
+        except:
+            print("Chyba pri zapisu parametru parms.txt.")
         
         
         logging.basicConfig(filename='./log/'+progname+'.log',
             filemode='a',level=logging.INFO,
             format='%(asctime)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S')
+            datefmt='%Y-%m-%d %H:%M:%S');
+            
+        
     
         return path2    
 
@@ -1814,6 +1521,25 @@ def help ():
     print (" ");
     print ("                                 Plati umera: cim vetsi davka tim vetsi naroky na pamet.");
     print ("                                              cim vetsi davka tim rychlejsi zpracovani.");
+    print ("        --units           pocet vypocetnich jednotek cislo v intervalu <32,1024>")
+    print ("                                 Pocet vypocetnich jednotek urcuje pocet neuronu zapojenych do vypoctu.")
+    print ("                                 Mějte prosím na paměti, že velikost units ovlivňuje"); 
+    print ("                                 dobu tréninku, chybu, které dosáhnete, posuny gradientu atd."); 
+    print ("                                 Neexistuje obecné pravidlo, jak urcit optimalni velikost parametru units.");
+    print ("                                 Obecne plati, ze maly pocet neuronu vede k nepresnym vysledkum a naopak");
+    print ("                                 velky pocet units muze zpusobit preuceni site - tedy stejny efekt jako pri");
+    print ("                                 nedostatecnem poctu units. Pamatujte, ze pocet units vyrazne ovlivnuje alokaci");
+    print ("                                 pameti. pro 1024 units je treba minimalne 32GiB u siti typu LSTM nebo GRU.");
+    print (" ");
+    print ("                                 Plati umera: cim vetsi units tim vetsi naroky na pamet.");
+    print ("                                              cim vetsi units tim pomalejsi zpracovani.");
+    print (" ");
+    print ("        --shuffle         Nahodne promichani treninkovych dat  <True, False>")
+    print ("                                 Nahodnym promichanim dat se docili nezavislosti na casove ose.")
+    print ("                                 V nekterych pripadech je tato metoda velmi vyhodna."); 
+    print ("                                 shuffle = True se uplatnuje jen v rezimu 'train' a pouze na treninkova"); 
+    print ("                                 data. Validacni a testovaci data se nemichaji."); 
+    print ("                                 Pokud shuffle neni uveden, je implicitne nastaven na 'True'."); 
     print (" ");
     print ("        --txdat1          timestamp zacatku datove mnoziny pro predict, napr '2022-04-09 08:00:00' ")
     print (" ");
@@ -1824,19 +1550,16 @@ def help ():
     print (" ");
     print (" ");
     print (" ");
-    print ("priklad: ./ai-neuro.py -t train, -m DENSE, -e 64 -b 128 -t1 2022-04-09 08:00:00 -t2 2022-04-09 12:00:00");
-    print ("nebo:    ./ai-neuro.py --typ train, --model DENSE, --epochs 64 --batch 128 --txdat1 2022-04-09 08:00:00 --txdat2 2022-04-09 12:00:00");
+    print ("priklad: ./ai-neuro.py -t train, -m DENSE, -e 64 -b 128 -s True -t1 2022-04-09 08:00:00 -t2 2022-04-09 12:00:00");
+    print ("nebo:    ./ai-neuro.py --typ train, --model DENSE, --epochs 64 --batch 128 --shuffle True  --txdat1 2022-04-09 08:00:00 --txdat2 2022-04-09 12:00:00");
     print('parametr --epochs musi byt cislo typu int <1, 256>')
     print ("POZOR! typ behu 'train' muze trvat nekolik hodin, zejmena u typu site LSTM nebo GRU!!!");
-    print ("       pricemz 'train' je povinny pri prvnim behu site, pri nemz se zapise natrenovany model.");
+    print ("       pricemz 'train' je povinny pri prvnim behu site. V rezimu 'train' se zapise ");
+    print ("       natrenovany model site..");
     print ("       V normalnim provozu natrenovane site doporucuji pouzit parametr 'predict' ktery.");
     print ("       spusti normalni beh site z jiz natrenovaneho modelu.");
     print ("       Takze: budte trpelivi...");
     print (" ");
-    print ("Pokud bude program spusten bez parametru, implicitne se dosadi -t train");
-    print ("                                                               -m DENSE");
-    print ("                                                               -e 64");
-    print ("                                                               -b 128");
     print (" ");
     print ("Vstupni parametry: ");
     print ("  pokud neexistuje v rootu aplikace soubor ai-parms.txt, pak jsou parametry implicitne");
@@ -1845,26 +1568,18 @@ def help ():
     print (" ");
     print ("  #Vystupni list parametru - co budeme chtit po siti predikovat");
     print ("  df_parmx = ['machinedata_m0412','teplota_pr01', 'x_temperature']");
-    print ("  df_parmy = ['machinedata_m0413','teplota_pr02', 'y_temperature']");
-    print ("  df_parmz = ['machinedata_m0414','teplota_pr03', 'z_temperature']");
     print (" ");
     print ("  #Tenzor predlozeny k uceni site");
     print ("  df_parmX = ['machinedata_m0112','machinedata_m0212','machinedata_m0312','machinedata_m0412','teplota_pr01', 'x_temperature'];");
-    print ("  df_parmY = ['machinedata_m0113','machinedata_m0213','machinedata_m0313','machinedata_m0413','teplota_pr02', 'y_temperature'];");
-    print ("  df_parmZ = ['machinedata_m0114','machinedata_m0214','machinedata_m0314','machinedata_m0414','teplota_pr03', 'z_temperature'];");
     print (" ");
     print ("Pokud pozadujete zmenu parametu j emozno primo v programu poeditovat tyto promenne ");
     print (" ");
     print ("a nebo vyrobit soubor ai-parms.txt s touto syntaxi ");
     print ("  #Vystupni list parametru - co budeme chtit po siti predikovat");
     print ("  df_parmx = machinedata_m0412,teplota_pr01,x_temperature'");
-    print ("  df_parmy = machinedata_m0413,teplota_pr02,y_temperature'");
-    print ("  df_parmz = machinedata_m0414,teplota_pr03,z_temperature'");
     print (" ");
     print ("  #Tenzor predlozeny k uceni site");
     print ("  df_parmX = machinedata_m0412,teplota_pr01, x_temperature");
-    print ("  df_parmY = machinedata_m0413,teplota_pr02, y_temperature");
-    print ("  df_parmZ = machinedata_m0414,teplota_pr03, z_temperature");
     print (" ");
     print ("a ten nasledne ulozit v rootu aplikace. (tam kde je pythonovsky zdrojak. ");
     print ("POZOR!!! nazvy promennych se MUSI shodovat s hlavickovymi nazvy vstupniho datoveho CSV souboru (nebo souboruuu)");
@@ -1891,8 +1606,13 @@ def help ():
 
 def main(argv):
     
-    global path_to_result
+    global path_to_result;
     path_to_result = "./result";
+    
+    global g_window;
+    g_window = 64;
+    
+    startTime = datetime.now();
 
     try:
         parm0 = sys.argv[0];
@@ -1901,13 +1621,14 @@ def main(argv):
         parm2 = "";
         parm3 = 0;
         parm4 = 0;
+        parm5 = 0;
         txdat1 = "";
         txdat2 = "";
+        shuffling = True;
 
-        
         txdat_format = "%Y-%m-%d %h:%m:%s"
         try:
-            opts, args = getopt.getopt(sys.argv[1:],"ht:m:e:b:t1:t2:h:x",["typ=", "model=", "epochs=", "batch=", "txdat1=","txdat2=","help="])
+            opts, args = getopt.getopt(sys.argv[1:],"ht:m:e:b:u:s:t1:t2:h:x",["typ=", "model=", "epochs=", "batch=", "units=", "shuffle=", "txdat1=","txdat2=", "help="])
         except getopt.GetoptError:
             print("Chyba pri parsovani parametru:");
             help()
@@ -1919,20 +1640,20 @@ def main(argv):
                 parm2 = arg.upper();
             elif opt in ("-e", "--epochs"):
                 try:
-                    r = range(1, 256);
+                    r = range(32-1, 256+1);
                     parm3 = int(arg);
                     if parm3 not in r:
-                        print("Chyba pri parsovani parametru: parametr 'epochs' musi byt cislo typu integer v rozsahu <1, 256>");
+                        print("Chyba pri parsovani parametru: parametr 'epochs' musi byt cislo typu integer v rozsahu <32, 256>");
                         help()
                         sys.exit(1)    
                         
                 except:
-                    print("Chyba pri parsovani parametru: parametr 'epochs' musi byt cislo typu integer v rozsahu <1, 256>");
+                    print("Chyba pri parsovani parametru: parametr 'epochs' musi byt cislo typu integer v rozsahu <32, 256>");
                     help()
                     sys.exit(1)    
             elif opt in ("-b", "--batch"):
                 try:
-                    r = range(32, 2048);
+                    r = range(32-1, 2048+1);
                     parm4 = int(arg);
                     if parm4 not in r:
                         print("Chyba pri parsovani parametru: parametr 'batch' musi byt cislo typu integer v rozsahu <32, 2048>");
@@ -1941,7 +1662,21 @@ def main(argv):
                 except:    
                     print("Chyba pri parsovani parametru: parametr 'batch' musi byt cislo typu integer v rozsahu <32, 2048>");
                     help()
+                    sys.exit(1)
+                    
+            elif opt in ("-u", "--units"):
+                try:
+                    r = range(32-1, 2048+1);
+                    parm5 = int(arg);
+                    if parm5 not in r:
+                        print("Chyba pri parsovani parametru: parametr 'units' musi byt cislo typu integer v rozsahu <32, 2048>");
+                        help()
+                        sys.exit(1)    
+                except:    
+                    print("Chyba pri parsovani parametru: parametr 'units' musi byt cislo typu integer v rozsahu <32, 2048>");
+                    help()
                     sys.exit(1)    
+                        
 
             elif opt in ["-t1","--txdat1"]:
                 txdat1 = arg;
@@ -1963,20 +1698,32 @@ def main(argv):
                         help()
                         sys.exit(1)    
 
+            elif opt in ["-s","--shuffle"]:
+                if arg.upper() == "TRUE":
+                    shuffling = True;
+                else:
+                    shuffling = False;    
+
             elif opt in ["-h","--help"]:
                 help()
                 sys.exit(0)
 
         
-        if len(sys.argv) < 9:
+        if len(sys.argv) < 8:
             help()
-            parm1 = 'train'
-            parm2 = 'DENSE'
-            parm3 = 32
-            parm4 = 128
-            #sys.exit(1);
+            sys.exit(1);
         
-        path_to_result = setEnv(path=path_to_result, model=parm2);
+        parms = "start s parametry: typ="+parm1+\
+                " model="+parm2+\
+                " epochs="+str(parm3)+\
+                " batch="+str(parm4)+\
+                " units="+str(parm5)+\
+                " shuffle="+str(shuffling)+\
+                " txdat1="+txdat1+\
+                " txdat2="+txdat2; 
+                    
+        logging.info(parms);
+        path_to_result = setEnv(path=path_to_result, model=parm2, type=parm1, parms=parms);
 
         startTime = datetime.now()
         logging.info("start...");
@@ -1990,7 +1737,10 @@ def main(argv):
                                      epochs=parm3, 
                                      batch=parm4,
                                      txdat1=txdat1,
-                                     txdat2=txdat2 
+                                     txdat2=txdat2,
+                                     window=g_window,
+                                     units=parm5,
+                                     shuffling=shuffling 
                                 );
             neural.neuralNetworkLSTMexec();
             
@@ -2001,7 +1751,10 @@ def main(argv):
                                      epochs=parm3, 
                                      batch=parm4,
                                      txdat1=txdat1,
-                                     txdat2=txdat2
+                                     txdat2=txdat2,
+                                     window=g_window,
+                                     units=parm5,
+                                     shuffling=shuffling  
                                 );
             neural.neuralNetworkDENSEexec();
             
@@ -2012,7 +1765,10 @@ def main(argv):
                                      epochs=parm3, 
                                      batch=parm4,
                                      txdat1=txdat1,
-                                     txdat2=txdat2
+                                     txdat2=txdat2,
+                                     window=g_window,
+                                     units=parm5,
+                                     shuffling=shuffling  
                                 );
             neural.neuralNetworkGRUexec();
             
