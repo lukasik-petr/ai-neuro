@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
 #------------------------------------------------------------------------------
+#https://wandb.ai/authors/ayusht/reports/Use-GPUs-With-Keras--VmlldzoxNjEyNjE
 # ai-neuro
 # (C) GNU General Public License,
 # pro potreby projektu TM-AI vyrobil Petr Lukasik , 2022 ");
@@ -57,13 +58,14 @@ import sys, getopt, traceback;
 import glob as glob;
 import pandas as pd;
 import seaborn as sns;
-import tensorflow as tf;
 import math;
+import json;
 import numpy as np;
 import shutil;
 import matplotlib as mpl;
 import matplotlib.pyplot as plt;
 import pickle;
+import scipy.interpolate as inter;
 
 from dateutil import parser
 from sklearn.preprocessing import MinMaxScaler;
@@ -100,6 +102,10 @@ from _cffi_backend import string
 from pandas.core.frame import DataFrame
 
 from scipy.signal import butter, lfilter, freqz
+
+# set GPU
+import tensorflow as tf;
+from keras.saving.save import save_model
 
 
 #---------------------------------------------------------------------------
@@ -138,7 +144,7 @@ class DataFactory():
     class DataResultDim:
           DataResultX: object;
 
-    def __init__(self, path_to_result, window):
+    def __init__(self, path_to_result, window, hyperparms):
         
     #Vystupni list parametru - co budeme chtit po siti predikovat
         self.df_parmx = ['temp_S1','temp_pr01',
@@ -172,12 +178,25 @@ class DataFactory():
         self.getParmsFromFile();
         self.window = window;
         self.df_multiplier = 1;
+        self.parms  = [];
+        self.header =["typ", 
+                      "model", 
+                      "epochs", 
+                      "units", 
+                      "batch", 
+                      "actf", 
+                      "shuffling", 
+                      "txdat1", 
+                      "txdat2",
+                      "curr_txdat"];
+
+        self.hyperparms = hyperparms;
 
 
     #---------------------------------------------------------------------------
     # myformat         
     #---------------------------------------------------------------------------
-    def myformat(x):
+    def myformat(self, x):
         return ('%.6f' % x).rstrip('0').rstrip('.');
 
     #---------------------------------------------------------------------------
@@ -238,6 +257,7 @@ class DataFactory():
 
     #---------------------------------------------------------------------------
     # divDF
+    # zkopiruje data za sebe self.df_multiplier krat....
     #---------------------------------------------------------------------------
     def divDF(self, df):
 
@@ -274,6 +294,29 @@ class DataFactory():
     
 
 
+    #---------------------------------------------------------------------------
+    # interpolateDF
+    # interpoluje data splinem - vyhlazeni schodu na merenych artefaktech
+    #---------------------------------------------------------------------------
+    def interpolateDF(self, df, smoothing_factor, ip):
+
+        if not ip:
+            print("Interpolace artefaktu nebude provedena ip = False");
+            return df;
+        else:
+            print("Interpolace artefaktu, smoothing_factor:", smoothing_factor);
+        
+        col_names = list(self.df_parmX);
+        x = np.arange(0,len(df));
+
+        for i in range(len(col_names)):
+            if "dev" in col_names[i]:
+                spl =  inter.UnivariateSpline(x, df[col_names[i]], s=smoothing_factor);
+                df[col_names[i]] = spl(x);
+
+        return df;
+
+
     
     #---------------------------------------------------------------------------
     # getData
@@ -294,37 +337,38 @@ class DataFactory():
             
             # sort souboru pro join
             joined_list.sort(key=None, reverse=False);
-            
+
+            #nacti jen ty sloupce, ktere maji pro neuro predict vyznam
+            usecols = ["datetime"];
+            for col in self.df_parmX:
+                usecols.append(col);
+
             df = pd.concat([pd.read_csv(csv_file,
-                                         sep=",|;", 
-                                         engine='python',  
-                                         header=0, encoding="utf-8",
+                                         sep = ",|;", 
+                                         engine = 'python',  
+                                         header = 0,
+                                         encoding = "utf-8",
+                                         usecols = usecols 
                                        )
                                     for csv_file in joined_list],
                                     axis=0, 
                                     ignore_index=True
                     );
+
+        # Odfiltruj data kdy stroj byl vypnut
+            df = df[(df["dev_x4"] != 0) & (df["dev_y4"] != 0) & (df["dev_z4"] != 0)];
+        # vyrob spline 
+            df = self.interpolateDF(df, 0.01, False);            
         # bordel pri domluve nazvoslovi...            
             df.columns = df.columns.str.lower();
-        # merge csv   
-        #   df.to_csv("./br_data/tm-ai_2022-00-01.csv", sep=";",  index=False, mode="w", encoding="utf-8");
-        #   sys.exit();
-
-            
         # vyber dat dle timestampu
             df["timestamp"] = pd.to_datetime(df["datetime"].str.slice(0, 18));
-
         # predikcni mnozina - pokus zvetsi testovaci mnozinu self.df_multiplier krat...      
-            df_test = self.multDF(df[df["timestamp"].between(timestamp_start, timestamp_stop)]);
-        # pokus - lowpass filter - nevyhodne zhorsuje presnost
-        #   df_test = self.lowpassFilter(df_test, self.df_parmx);
-
+            df_test = df[df["timestamp"].between(timestamp_start, timestamp_stop)];
+        # interpolace predikcni mnoziny dat
+        #   df_test  = self.interpolateDF(df_test, 0.0005, False);            
         # treninkova a validacni mnozina    
             df = df[(df["timestamp"] < timestamp_start) | (df["timestamp"] > timestamp_stop)];
-        # pokus - zvetsi treninkovou a validacni mnozinu self.df_multiplier krat...
-        #   df = self.multDF(df);    
-        # pokus - lowpass filter - nevyhodne zhorsuje presnost
-        #   df = self.lowpassFilter(df, self.df_parmX);
 
             if self.window >= len(df_test) and txdt_b:
                 print("Prilis maly vzorek dat pro predikci - exit(1)");
@@ -339,7 +383,8 @@ class DataFactory():
             size_test  = math.floor(size * 0 / 12)  
 
             if self.df_parmx == None or self.df_parmX == None:
-                print("");
+                print("Nebyly zadany parametry pro trenink a predikci site (soubor ai-parms.txt) - exit(1)");
+                sys.exit(1);
             else:
                 self.DataTrainDim.DataTrain = self.setDataX(df=df, 
                                                              df_test=df_test, 
@@ -349,7 +394,6 @@ class DataFactory():
                                                              txdt_b=txdt_b,
                                                              shuffling=shuffling 
                                                         );
-            
 
             return self.DataTrainDim(self.DataTrainDim.DataTrain);
 
@@ -362,6 +406,7 @@ class DataFactory():
         
     #-----------------------------------------------------------------------
     # saveDataResult  - result
+    # index = pd.RangeIndex(start=10, stop=30, step=2, name="data")
     #-----------------------------------------------------------------------
     def saveDataResult(self, timestamp_start, model, typ, saveresult=True):
         
@@ -419,17 +464,14 @@ class DataFactory():
             
             df_result2 = pd.DataFrame();
             df_result2 = pd.DataFrame(self.DataTrain.test);
-            df_result2.drop(col_names_drop2, inplace=True, axis=1);
 
-            df_result  = pd.concat([df_result2, df_result], axis=1);
-            df_result["txdat_group"] = timestamp_start;
+            #merge - left inner join
+            df_result  = pd.concat([df_result.reset_index(drop=True),df_result2.reset_index(drop=True)], axis=1);
             
-            df_result = self.divDF(df_result);
-
-            
-            
-            
-            #df_result = df_result.assign(Index=range(len(df_result))).set_index('Index')
+            # U gru se na posledni vete vyskytuje NaN
+            for col in col_names_dev:
+                col = col+"_predict";
+                df_result[col] = df_result[col].fillna(0);
             
             # Absolute Error
             for col in col_names_dev:
@@ -439,8 +481,29 @@ class DataFactory():
             for col in col_names_dev:
                 mse = mean_squared_error(df_result[col],df_result[col+"_predict"]);
                 df_result[col+"_mse"] = mse;
+
+            list_cols     = list({"idx"}); 
+            list_cols_avg = list({"idx"}); 
             
+            for col in col_names_dev:
+                if "dev" in col:
+                    list_cols.append(col+"_predict");
+                    list_cols_avg.append(col+"_predict_avg");
+
+                    
+            # index = pd.RangeIndex(start=10, stop=30, step=2, name="data")
+            # df_result['idx'] = df_result["dev_x4"];
+            #df_result.set_index('idx')
+            #df_merge = df_result[list_cols];
+            #df_merge.columns = list_cols_avg;
+            #df_merge = df_merge.groupby(['idx']).mean();
+            #df_result  = df_result.merge(df_merge, how='inner', on='idx');
             
+            # MAE avg cols
+            for col in col_names_dev:
+                ae = (df_result[col] - df_result[col+"_predict"]);
+                df_result[col+"_ae"] = ae;
+
             
             path = Path(filename)
 
@@ -455,11 +518,62 @@ class DataFactory():
             else:
                 print(f'Soubor {filename} neexistuje - create', len(df_result));
                 df_result.to_csv(filename, mode = "w", index=True, header=True, float_format='%.5f');
+                
+            self.saveParmsMAE(df_result, model)    
 
         except Exception as ex:
             traceback.print_exc();
             logging.error(traceback.print_exc());
         
+        return;
+    
+    #-----------------------------------------------------------------------
+    # saveParmsMAE - zapise hodnoty MAE v zavislosti na pouzitych parametrech
+    #-----------------------------------------------------------------------
+    def saveParmsMAE(self, df,  model):
+
+        filename = "./result/parms_mae_"+model+".csv"
+        
+        #pridej maximalni hodnotu AE
+        for col in df.columns:
+            if "_ae" in col:
+                if "_avg" in col:
+                    self.header.append(col+"_max");
+                    res = self.myformat(df[col].abs().max())
+                    self.parms.append(float(res));        
+                else:
+                    self.header.append(col+"_max");
+                    res = self.myformat(df[col].abs().max())
+                    self.parms.append(float(res));        
+        
+        #pridej mean AE
+        for col in df.columns:
+            if "_ae" in col:
+                if "_avg" in col:
+                    self.header.append(col+"_avg");
+                    res = self.myformat(df[col].abs().mean())
+                    self.parms.append(float(res));        
+                else:
+                    self.header.append(col+"_avg");
+                    res = self.myformat(df[col].abs().mean())
+                    self.parms.append(float(res));        
+
+        df_ae = pd.DataFrame(data=[self.parms], columns=self.header);
+        df_ae["hyperparms"] = self.hyperparms;
+        
+        path = Path(filename)
+        if path.is_file():
+            append = True;
+        else:
+            append = False;
+        
+        if append:             
+            print(f'Soubor {filename} existuje - append');
+            df_ae.to_csv(filename, mode = "a", index=True, header=False, float_format='%.5f');
+        else:
+            print(f'Soubor {filename} neexistuje - create');
+            df_ae.to_csv(filename, mode = "w", index=True, header=True, float_format='%.5f');
+            
         return;    
         
     #-----------------------------------------------------------------------
@@ -766,6 +880,18 @@ class DataFactory():
     
     def getDf_parmX(self):
         return self.df_parmX;
+    
+    def setParms(self, parms):
+        self.parms = parms;
+    
+    def getParms(self):
+        return self.parms;
+    
+    def setHeader(self, header):
+        self.header = header;
+    
+    def getHeader(self):
+        return self.header;
 
 #---------------------------------------------------------------------------
 # MinimalRNNCell
@@ -795,7 +921,7 @@ class MinimalRNNCell(layers.Layer):
 
 
 #---------------------------------------------------------------------------
-# GraphResult
+# GraphResult - v tuto chvili vyblokovan.... printgraph = False
 #---------------------------------------------------------------------------
 class GraphResult():
 
@@ -812,7 +938,7 @@ class GraphResult():
         self.txdat2 = txdat2;
         self.actf = actf;
         if "predict" in type:
-            self.printgraph = True;
+            self.printgraph = False;
         else:    
             self.printgraph = printgraph;
 
@@ -899,12 +1025,25 @@ class GraphResult():
                     axis="OSA_Y"
                 if "14" in col_names_y[col] or "z" in col_names_y[col]:
                     axis="OSA_Z"
-                        
                 
                 if ("MACH" in col_names_y[col].upper() or "DEV" in col_names_y[col].upper()):
-                    df_graph = pd.DataFrame(DataResult.y_test[ : ,col]);
-                    df_graph['out'] = DataResult.y_test[ : , col];
-                    df_graph['out_predict'] = DataResult.y_result[ : , col];
+                    
+                    arr_test = DataResult.y_test[ : ,col];
+                    arr_result = DataResult.y_result[ : , col];
+                    len_arr_test = len(arr_test);
+                    len_arr_result = len(arr_result);
+                    
+                    # cut v pripade ze ne delky listu nerovnaji....
+                    if len_arr_test > len_arr_result:
+                        arr_test = arr_test[ : len_arr_result];
+
+                    if len_arr_test < len_arr_result:
+                        arr_result = arr_result[ : len_arr_test];
+                        
+                    
+                    df_graph = pd.DataFrame();
+                    df_graph['out'] = arr_test;
+                    df_graph['out_predict'] = arr_result;
                     
                     df_graph, mse, mae  = self.groupAvg(df_graph);
                     number_of_samples = len(df_graph.index)
@@ -1100,7 +1239,7 @@ class NeuronLayerDENSE():
         y_dataset: object              #vstupni data
         cols:      int                 #pocet sloupcu v datove sade
 
-    def __init__(self, path_to_result, typ, model, epochs, batch, txdat1, txdat2, window, units=256, shuffling=True, actf="tanh"):
+    def __init__(self, path_to_result, typ, model, epochs, batch, txdat1, txdat2, window, units=256, shuffling=False, actf="tanh", current_date=""):
         
         self.path_to_result = path_to_result; 
         self.typ = typ;
@@ -1118,17 +1257,62 @@ class NeuronLayerDENSE():
         self.units = units;
         self.shuffling = shuffling;
         self.actf = actf;
+        self.current_date=current_date;
         
         self.x_train_scaler = None;
         self.y_train_scaler = None;
         self.x_valid_scaler = None;
         self.y_valid_scaler = None;
 
+        #hyperparametry hidden vrstev <DENSE>
+        self.kernel_initializer = tf.keras.initializers.RandomUniform(minval=-0.05, maxval=0.05, seed=None);
+ 
+        self.use_bias = False;
+        self.bias_initializer="zeros";
+        self.kernel_regularizer=None;
+        self.bias_regularizer=None;
+        self.activity_regularizer=None;
+        self.kernel_constraint=None;
+        self.bias_constraint=None;
+        self.layers_count=2;
+
+        #hyperparametry vrstvy COMPILE
+        self.loss="mse"; # "huber" "binary_crossentropy" "categorical_crossentropy" #"mse" - nejlepsi vysledky, 
+        self.optimizer="adam"; #"SGD", "RMSprop","Adam", "Adadelta", "Adagrad", "Adamax", "Adam nebo Nadam - nejlepsi vysledky", 
+        self.metrics=['mse', 'acc'];
+        self.loss_weights = None; 
+        self.sample_weight_mode = None; 
+        self.weighted_metrics = None; 
+        self.target_tensors = None;
+
+        #hyperparametry vrstvy FIT
+        self.batch_size=self.batch;
+        self.epochs=self.epochs;
+        self.verbose = 2 #"auto";
+        self.callbacks=None;
+        self.validation_split=0.0;
+        self.shuffle=True; #shuffle=False vyrazne zhorsuje presnost predikce
+        self.class_weight=None;
+        self.sample_weight=None;
+        self.initial_epoch=0;
+        self.steps_per_epoch=None;
+        self.validation_steps=None;
+        self.validation_batch_size=None;
+        self.validation_freq=1;
+        self.max_queue_size=1;
+        self.workers=1;
+        self.use_multiprocessing=False;
+
+        # implicitni nebo parametricka neuronova vrstva?
+        # True - implicitni - neuralNetworkDENSEtrainImp(...):
+        # False - parametricka - neuralNetworkDENSEtrainParm(...):
+        self.isImp = True;
+
         
     #---------------------------------------------------------------------------
-    # Neuronova Vrstava DENSE 
+    # Neuronova Vrstava DENSE - parametry k nastaveni
     #---------------------------------------------------------------------------
-    def neuralNetworkDENSEtrain(self, DataTrain):
+    def neuralNetworkDENSEtrainParm(self, DataTrain):
 
         try:        
             y_train_data = np.array(DataTrain.train[DataTrain.df_parm_y]);
@@ -1156,31 +1340,171 @@ class NeuronLayerDENSE():
             self.y_valid_scaler = MinMaxScaler(feature_range=(0, 1))
             y_valid_data = self.y_valid_scaler.fit_transform(y_valid_data)
             pickle.dump(self.y_train_scaler, open("./temp/y_valid_scaler.pkl", 'wb'))
-            
+
         # neuronova sit
             model = Sequential();
+        # vstupni vrstva
             model.add(tf.keras.Input(shape=(inp_size,)));
-            model.add(layers.Dense(units=inp_size,   activation=self.actf, kernel_initializer='he_normal'));
-            model.add(layers.Dense(units=self.units, activation=self.actf, kernel_initializer='he_normal'));
-            model.add(layers.Dense(units=self.units, activation=self.actf, kernel_initializer='he_normal'));
-            model.add(layers.Dense(units=self.units, activation=self.actf, kernel_initializer='he_normal'));
-#            model.add(layers.Dense(units=self.units, activation=self.actf, kernel_initializer='he_normal'));
-#            model.add(layers.Dense(units=self.units, activation=self.actf, kernel_initializer='he_normal'));
+            model.add(layers.Dense(units=inp_size,
+                                   activation=self.actf,
+                                   kernel_initializer = self.kernel_initializer,
+                                   use_bias=self.use_bias
+            ));
+        # hidden vrstva
+            for i in range(self.layers_count):
+                model.add(layers.Dense(units=self.units,
+                                       activation = self.actf,
+                                       kernel_initializer = self.kernel_initializer,
+                                       use_bias = self.use_bias,
+                                       bias_initializer = self.bias_initializer,
+                                       kernel_regularizer = self.kernel_regularizer,
+                                       bias_regularizer = self.bias_regularizer,
+                                       activity_regularizer = self.activity_regularizer,
+                                       kernel_constraint = self.kernel_constraint,
+                                       bias_constraint = self.bias_constraint
+                ));
             model.add(layers.Dense(out_size));
             
         # definice ztratove funkce a optimalizacniho algoritmu
-            model.compile(loss='mse', optimizer='adam', metrics=['mse', 'acc'])
+            model.compile(loss = self.loss,
+                          optimizer = self.optimizer,
+                          metrics = self.metrics,
+                          loss_weights = self.loss_weights, 
+                          sample_weight_mode = self.sample_weight_mode, 
+                          weighted_metrics = self.weighted_metrics, 
+                          target_tensors = self.target_tensors
+            );
+            
+        # natrenuj model na vstupni dataset
+            history = model.fit(x = x_train_data, 
+                                y = y_train_data, 
+                                validation_data = (x_valid_data, y_valid_data),
+                                batch_size = self.batch,
+                                epochs = self.epochs,
+                                verbose = self.verbose,
+                                callbacks = self.callbacks,
+                                validation_split = self.validation_split,
+                                shuffle = self.shuffle,
+                                class_weight = self.class_weight,
+                                sample_weight = self.sample_weight,
+                                initial_epoch = self.initial_epoch,
+                                steps_per_epoch = self.steps_per_epoch,
+                                validation_steps = self.validation_steps,
+                                #validation_batch_size = self.validation_batch_size,
+                                #validation_freq = self.validation_freq,
+                                #max_queue_size = self.max_queue_size,
+                                #workers = self.workers,
+                                #use_multiprocessing = self.use_multiprocessing
+            );
+        
+        
+        #kolik se vynecha o zacatku v grafu?
+            start_point = 0
+            loss_train = history.history['loss'];
+            loss_train = self.graph.smoothGraph(points = loss_train[start_point:], factor = 0.9)
+            loss_val = history.history['val_loss'];
+            loss_val = self.graph.smoothGraph(points = loss_val[start_point:], factor =  0.9)
+            epochs = range(0,len(loss_train));
+            plt.clf();
+            plt.plot(epochs, loss_train, label='LOSS treninku');
+            #plt.plot(epochs, loss_val,   label='LOSS validace');
+            plt.title('LOSS treninku '+ DataTrain.axis);
+            plt.xlabel('Pocet epoch');
+            plt.ylabel('LOSS');
+            plt.legend();
+            plt.savefig(self.path_to_result+'/graf_loss_'+DataTrain.axis+'.pdf', format='pdf');
+            plt.clf();
+        
+            acc_train =  history.history['acc'];
+            acc_train = self.graph.smoothGraph(points=acc_train[start_point:], factor = 0.9)
+            acc_val = history.history['val_acc'];
+            acc_val = self.graph.smoothGraph(points=acc_val[start_point:], factor = 0.9)
+            epochs = range(0,len(acc_train));
+            plt.clf();
+            plt.plot(epochs, acc_train, label='ACC treninku');
+            #plt.plot(epochs, acc_val, label='ACC validace');
+            plt.title('ACC treninku '+DataTrain.axis);
+            plt.xlabel('Pocet epoch');
+            plt.ylabel('ACC');
+            plt.legend();
+            plt.savefig(self.path_to_result+'/graf_acc_'+DataTrain.axis+'.pdf', format='pdf');
+            plt.clf();
+
+        #tf.saved_model.save(model, self.path_to_result+'/model')
+            model.save('./models/model_'+self.model+'_'+ DataTrain.axis, overwrite=True, include_optimizer=True)
+        
+        # make predictions for the input data
+            return (model);
+    
+            
+        except Exception as ex:
+            traceback.print_exc();
+            logging.error(traceback.print_exc());
+
+
+    #---------------------------------------------------------------------------
+    # Neuronova Vrstava DENSE Implicitni parametry
+    #---------------------------------------------------------------------------
+    def neuralNetworkDENSEtrainImp(self, DataTrain):
+
+        try:
+            
+            y_train_data = np.array(DataTrain.train[DataTrain.df_parm_y]);
+            x_train_data = np.array(DataTrain.train[DataTrain.df_parm_x]);
+            y_valid_data = np.array(DataTrain.valid[DataTrain.df_parm_y]);
+            x_valid_data = np.array(DataTrain.valid[DataTrain.df_parm_x]);
+        
+            inp_size = len(x_train_data[0])
+            out_size = len(y_train_data[0])
+            
+        # normalizace dat k uceni a vstupnich treninkovych dat 
+            self.x_train_scaler = MinMaxScaler(feature_range=(0, 1))
+            x_train_data = self.x_train_scaler.fit_transform(x_train_data)
+            pickle.dump(self.x_train_scaler, open("./temp/x_train_scaler.pkl", 'wb'))
+            
+            self.y_train_scaler = MinMaxScaler(feature_range=(0, 1))
+            y_train_data = self.y_train_scaler.fit_transform(y_train_data)
+            pickle.dump(self.y_train_scaler, open("./temp/y_train_scaler.pkl", 'wb'))
+            
+        # normalizace dat k uceni a vstupnich treninkovych dat 
+            self.x_valid_scaler = MinMaxScaler(feature_range=(0, 1))
+            x_valid_data = self.x_valid_scaler.fit_transform(x_valid_data)
+            pickle.dump(self.x_train_scaler, open("./temp/x_valid_scaler.pkl", 'wb'))
+            
+            self.y_valid_scaler = MinMaxScaler(feature_range=(0, 1))
+            y_valid_data = self.y_valid_scaler.fit_transform(y_valid_data)
+            pickle.dump(self.y_train_scaler, open("./temp/y_valid_scaler.pkl", 'wb'))
+
+        # neuronova sit
+            model = Sequential();
+            #initializer = tf.keras.initializers.RandomNormal(mean=0., stddev=1.)
+            initializer = tf.keras.initializers.RandomUniform(minval=-0.05, maxval=0.05, seed=None)
+            #initializer = tf.keras.initializers.HeNormal(seed=None);
+            #initializer = 'lecun_normal'
+
+            
+            model.add(tf.keras.Input(shape=(inp_size,)));
+            model.add(layers.Dense(units=inp_size,       activation=self.actf, kernel_initializer=initializer));
+            model.add(layers.Dense(units=self.units,     activation=self.actf, kernel_initializer=initializer));
+            model.add(layers.Dense(units=self.units,     activation=self.actf, kernel_initializer=initializer));
+        #   model.add(layers.Dense(units=self.units,     activation=self.actf, kernel_initializer=initializer));
+        #   model.add(layers.Dense(units=self.units,     activation=self.actf, kernel_initializer=initializer));
+            model.add(layers.Dense(out_size));
+            
+        # definice ztratove funkce a optimalizacniho algoritmu
+            model.compile(loss='mse',
+                          optimizer='adam',
+                          metrics=['mse', 'acc'])
             
         # natrenuj model na vstupni dataset
             history = model.fit(x_train_data, 
                                 y_train_data, 
-                            epochs=self.epochs, 
-                            batch_size=self.batch, 
-                            verbose=2, 
-                            validation_data=(x_valid_data, y_valid_data)
+                                epochs=self.epochs, 
+                                batch_size=self.batch, 
+                                verbose=2, 
+                                validation_data=(x_valid_data, y_valid_data)
                             )
-        
-        
+
         #kolik se vynecha o zacatku v grafu?
             start_point = 0
             loss_train = history.history['loss'];
@@ -1213,6 +1537,8 @@ class NeuronLayerDENSE():
             plt.savefig(self.path_to_result+'/graf_acc_'+DataTrain.axis+'.pdf', format='pdf');
             plt.clf();
 
+            
+        
         #tf.saved_model.save(model, self.path_to_result+'/model')
             model.save('./models/model_'+self.model+'_'+ DataTrain.axis, overwrite=True, include_optimizer=True)
         
@@ -1222,7 +1548,10 @@ class NeuronLayerDENSE():
             
         except Exception as ex:
             traceback.print_exc();
-            logging.error(traceback.print_exc());
+            sys.stderr.write(str(traceback.print_exc()));
+            #self.logger.error(traceback.print_exc());
+        
+            
         
     #---------------------------------------------------------------------------
     # Neuronova Vrstava DENSE predict
@@ -1242,8 +1571,11 @@ class NeuronLayerDENSE():
     def neuralNetworkDENSEpredict(self, model, DataTrain):
         
         try:
-            axis     = DataTrain.axis;  
+            axis     = DataTrain.axis;
+
+            
             x_test   = np.array(DataTrain.test[DataTrain.df_parm_x]);
+            DataTrain.test[DataTrain.df_parm_y].to_csv("test.csv");
             y_test   = np.array(DataTrain.test[DataTrain.df_parm_y]);
             
             self.x_train_scaler =  pickle.load(open("./temp/x_train_scaler.pkl", 'rb'))
@@ -1277,7 +1609,14 @@ class NeuronLayerDENSE():
             if self.typ == 'train':
                 print("Start vcetne treninku, model bude zapsan");
                 logging.info("Start vcetne treninku, model bude zapsan");
-                model_x = self.neuralNetworkDENSEtrain(data.DataTrainDim.DataTrain);
+                if self.isImp:
+                    #neuronova vrstva s implicitnimi parametry
+                    print(">>>>>Neuronova vrstva s implicitnimi parametry...");
+                    model_x = self.neuralNetworkDENSEtrainImp(data.DataTrainDim.DataTrain);
+                else:    
+                    #parametricka neuronova vrstva
+                    print(">>>>>Neuronova vrstva s explicitnimi parametry...");
+                    model_x = self.neuralNetworkDENSEtrainParm(data.DataTrainDim.DataTrain);
             else:    
                 print("Start bez treninku - model bude nacten");
                 logging.info("Start bez treninku - model bude nacten");
@@ -1302,10 +1641,12 @@ class NeuronLayerDENSE():
     # neuralNetworkDENSEexec
     #------------------------------------------------------------------------
     def neuralNetworkDENSEexec(self):
-
+           
         try:
-            print("Pocet GPU jader: ", len(tf.config.experimental.list_physical_devices('GPU')))
-            self.data = DataFactory(path_to_result=self.path_to_result, window=self.window);
+            self.data = DataFactory(path_to_result = self.path_to_result,
+                                    window = self.window,
+                                    hyperparms = self.getDENSEhyperparms(yn=self.isImp)
+                                );    
             self.graph = GraphResult(path_to_result=self.path_to_result, 
                                      model=self.model, 
                                      type=self.typ,
@@ -1321,6 +1662,19 @@ class NeuronLayerDENSE():
             if self.typ == 'predict':
                 self.shuffling = False;
         
+            parms = [self.typ,
+                     self.model,
+                     self.epochs,
+                     self.units,
+                     self.batch,
+                     self.actf,
+                     str(self.shuffling), 
+                     self.txdat1, 
+                     self.txdat2,
+                     str(self.current_date)];
+            
+            self.data.setParms(parms);
+            
             self.data.Data = self.data.getData(shuffling=self.shuffling, timestamp_start=self.txdat1, timestamp_stop=self.txdat2);
 
     # osa X    
@@ -1330,10 +1684,12 @@ class NeuronLayerDENSE():
             else:
                 self.neuralNetworkDENSEexec_x(data=self.data, graph=self.graph);
             
+            global save_model;
     # archivuj vyrobeny model site            
-            if self.typ == 'train':
+            if self.typ == 'train' and save_model: 
                 saveModelToArchiv(model="DENSE", dest_path=self.path_to_result, data=self.data);
-                
+
+
             return(0);
 
         except Exception as ex:
@@ -1341,6 +1697,66 @@ class NeuronLayerDENSE():
             logging.error(traceback.print_exc());
 
 
+#------------------------------------------------------------------------
+# getter setter
+#------------------------------------------------------------------------
+    def getDENSEhyperparms(self, yn=True):
+
+        parms = [];
+
+        if not yn:
+            parms =[
+        #hyperparametry hidden vrstev <DENSE>
+            ["parametry:", "default"]];         
+        else:
+            parms =[
+        #hyperparametry hidden vrstev <DENSE>
+            ["kernel_initializer:", str(self.kernel_initializer)],         
+            ["use_bias", str(self.use_bias)],
+            ["bias_initializer", str(self.bias_initializer)],
+            ["kernel_regularizer", str(self.kernel_regularizer)],
+            ["bias_regularizer", str(self.bias_regularizer)],
+            ["activity_regularizer", str(self.activity_regularizer)],
+            ["kernel_constraint", str(self.kernel_constraint)],
+            ["bias_constraint", str(self.bias_constraint)],
+            ["layers_count", str(self.layers_count)],
+        #hyperparametry vrstvy COMPILE             
+            ["loss", str(self.loss)],
+            ["optimizer", str(self.optimizer)],
+            ["metrics", str(self.metrics)],
+            ["loss_weights", str(self.loss_weights)],
+            ["sample_weight_mode", str(self.sample_weight_mode)],
+            ["weighted_metrics", str(self.weighted_metrics)],
+            ["target_tensors", str(self.target_tensors)],
+        #hyperparametry vrstvy FIT                 
+            ["batch_size", str(self.batch_size)],
+            ["epochs", str(self.epochs)],
+            ["verbose", str(self.verbose)],
+            ["callbacks", str(self.callbacks)],
+            ["validation_split", str(self.validation_split)],
+            ["shuffle", str(self.shuffle)],
+            ["class_weight", str(self.class_weight)],
+            ["sample_weight", str(self.sample_weight)],
+            ["initial_epoch", str(self.initial_epoch)],
+            ["steps_per_epoch", str(self.steps_per_epoch)],
+            ["validation_steps", str(self.validation_steps)],
+            ["validation_batch_size", str(self.validation_batch_size)],
+            ["validation_freq", str(self.validation_freq)],
+            ["max_queue_size", str(self.max_queue_size)],
+            ["workers", str(self.workers)],
+            ["use_multiprocessing", str(self.use_multiprocessing)]];
+
+        str_json = "[";
+        for rows in parms[0:]:
+            row = "{\"parm\" : \"" + rows[0] + "\", \"val\" : \"" + rows[1] + "\"},\n";
+            str_json += row;
+            
+        str_json = str_json[:-2] + "]"
+        return(str_json);
+
+        
+           
+            
 #---------------------------------------------------------------------------
 # Neuronova Vrstava LSTM
 #---------------------------------------------------------------------------
@@ -1354,7 +1770,7 @@ class NeuronLayerLSTM():
         y_dataset: object              #vstupni data
         cols:      int                 #pocet sloupcu v datove sade
 
-    def __init__(self, path_to_result, typ, model, epochs, batch, txdat1, txdat2, window, units=256, shuffling=True, actf="tanh"):
+    def __init__(self, path_to_result, typ, model, epochs, batch, txdat1, txdat2, window, units=256, shuffling=True, actf="tanh",current_date="-"):
         
         self.path_to_result = path_to_result; 
         self.typ = typ;
@@ -1372,17 +1788,86 @@ class NeuronLayerLSTM():
         self.units  = units;
         self.shuffling = shuffling;
         self.actf = actf;
+        self.current_date=current_date;
 
         self.x_train_scaler = None;
         self.y_train_scaler = None;
         self.x_valid_scaler = None;
         self.y_valid_scaler = None;
+        self.layer_count = 2;
+
+
+                #hyperparametry hidden vrstev LSTM
+        self.activation="tanh",
+        self.recurrent_activation="sigmoid";
+        self.use_bias=True;
+        self.kernel_initializer="glorot_uniform";
+        self.recurrent_initializer="orthogonal";
+        self.bias_initializer="zeros";
+        self.unit_forget_bias=True;
+        self.kernel_regularizer=None;
+        self.recurrent_regularizer=None;
+        self.bias_regularizer=None;
+        self.activity_regularizer=None;
+        self.kernel_constraint=None;
+        self.recurrent_constraint=None;
+        self.bias_constraint=None;
+        self.dropout=0.0;
+        self.recurrent_dropout=0.0;
+        self.return_sequences=False;
+        self.return_state=False;
+        self.go_backwards=False;
+        self.stateful=False;
+        self.time_major=False;
+        self.unroll=False;
         
+        self.kernel_initializer="glorot_uniform";
+        self.use_bias = True;
+        self.bias_initializer="zeros";
+        self.kernel_regularizer=None;
+        self.bias_regularizer=None;
+        self.activity_regularizer=None;
+        self.kernel_constraint=None;
+        self.bias_constraint=None;
+        self.layers_count=2;
+        
+        #hyperparametry vrstvy COMPILE
+        self.loss="mse", 
+        self.optimizer="Adam"; #"SGD", "RMSprop","Adam", "Adadelta", "Adagrad", "Adamax", "Nadam", "Ftrl"
+        self.metrics=['mse', 'acc'];
+        self.loss_weights = None; 
+        self.sample_weight_mode = None; 
+        self.weighted_metrics = None; 
+        self.target_tensors = None;
+
+        #hyperparametry vrstvy FIT
+        self.batch_size=self.batch;
+        self.epochs=self.epochs;
+        self.verbose="auto";
+        self.callbacks=None;
+        self.validation_split=0.0;
+        self.shuffle=True;
+        self.class_weight=None;
+        self.sample_weight=None;
+        self.initial_epoch=0;
+        self.steps_per_epoch=None;
+        self.validation_steps=None;
+        self.validation_batch_size=None;
+        self.validation_freq=1;
+        self.max_queue_size=10;
+        self.workers=1;
+        self.use_multiprocessing=False;
+
+       
 
     #---------------------------------------------------------------------------
     # Neuronova Vrstava LSTM
     #---------------------------------------------------------------------------
     def neuralNetworkLSTMtrain(self, DataTrain):
+        
+        
+        
+        #velikost okna....
         window_X = self.window;
         window_Y =  1;
         
@@ -1423,15 +1908,15 @@ class NeuronLayerLSTM():
         #vystupni data pro trenink -3D tenzor
             Y_valid = DataFactory.toTensorLSTM(y_valid_data, window=window_Y);
             Y_valid.X_dataset = Y_valid.X_dataset[0 : X_valid.X_dataset.shape[0]];
-            
         # neuronova sit
             model = Sequential();
+        # input vrstva    
             model.add(Input(shape=(X_train.X_dataset.shape[1], X_train.cols,)));
-            model.add(LSTM(units = self.units, return_sequences=True));
-            model.add(Dropout(0.2));
-            model.add(LSTM(units = self.units, return_sequences=True));
-            model.add(Dropout(0.2));
-            model.add(LSTM(units = self.units, return_sequences=True));
+        # hidden vrstva    
+            for i in range(self.layers_count):
+                model.add(LSTM(units = self.units, return_sequences=True));
+                model.add(Dropout(0.2));
+        # output vrstva        
             model.add(layers.Dense(Y_train.cols, activation='relu'));
 
         # definice ztratove funkce a optimalizacniho algoritmu
@@ -1446,6 +1931,7 @@ class NeuronLayerLSTM():
                                                  Y_valid.X_dataset)
                             );
 
+            
         # start point grafu - kolik se vynecha na zacatku
             start_point = 1;
 
@@ -1564,10 +2050,13 @@ class NeuronLayerLSTM():
     # neuralNetworkLSTMexec
     #------------------------------------------------------------------------
     def neuralNetworkLSTMexec(self):
+
         
         try:
-            print("Pocet GPU jader: ", len(tf.config.experimental.list_physical_devices('GPU')))
-            self.data = DataFactory(path_to_result=self.path_to_result, window=self.window)
+            self.data = DataFactory(path_to_result=self.path_to_result,
+                                    window=self.window,
+                                    hyperparms = self.getLSTMhyperparms()
+                                );
             self.graph = GraphResult(path_to_result=self.path_to_result, 
                                      model=self.model, 
                                      type=self.typ,
@@ -1583,6 +2072,19 @@ class NeuronLayerLSTM():
             shuffling = False;
             if self.typ == 'predict':
                 self.shuffling = False;
+
+            parms = [self.typ,
+                     self.model,
+                     self.epochs,
+                     self.units,
+                     self.batch,
+                     self.actf,
+                     str(self.shuffling), 
+                     self.txdat1, 
+                     self.txdat2,
+                     str(self.current_date)];
+            
+            self.data.setParms(parms);
         
             self.data.Data = self.data.getData(shuffling=self.shuffling, timestamp_start=self.txdat1, timestamp_stop=self.txdat2);
 
@@ -1593,9 +2095,9 @@ class NeuronLayerLSTM():
             else:
                 self.neuralNetworkLSTMexec_x(data=self.data, graph=self.graph);
             
-        
+            global save_model;
     # archivuj vyrobeny model site            
-            if self.typ == 'train':
+            if self.typ == 'train' and save_model: 
                 saveModelToArchiv(model="LSTM", dest_path=self.path_to_result, data=self.data);
             return(0);
 
@@ -1604,7 +2106,70 @@ class NeuronLayerLSTM():
             logging.error(traceback.print_exc());
 
 
+#------------------------------------------------------------------------
+# getter setter
+#------------------------------------------------------------------------
+    def getLSTMhyperparms(self):
+        parms =[
+        #hyperparametry hidden vrstev <LSTM>
 
+            ["activation" , str(self.activation)],            
+            ["recurrent_activation" , str(self.recurrent_activation)],  
+            ["use_bias" , str(self.use_bias)],              
+            ["kernel_initializer" , str(self.kernel_initializer)],    
+            ["recurrent_initializer" , str(self.recurrent_initializer)], 
+            ["bias_initializer" , str(self.bias_initializer)],      
+            ["unit_forget_bias" , str(self.unit_forget_bias)],      
+            ["kernel_regularizer" , str(self.kernel_regularizer)],    
+            ["recurrent_regularizer" , str(self.recurrent_regularizer)], 
+            ["bias_regularizer" , str(self.bias_regularizer)],      
+            ["activity_regularizer" , str(self.activity_regularizer)],  
+            ["kernel_constraint" , str(self.kernel_constraint)],     
+            ["recurrent_constraint" , str(self.recurrent_constraint)],  
+            ["bias_constraint" , str(self.bias_constraint)],       
+            ["dropout" , str(self.dropout)],               
+            ["recurrent_dropout" , str(self.recurrent_dropout)],     
+            ["return_sequences" , str(self.return_sequences)],      
+            ["return_state" , str(self.return_state)],          
+            ["go_backwards" , str(self.go_backwards)],          
+            ["stateful" , str(self.stateful)],              
+            ["time_major" , str(self.time_major)],            
+            ["unroll" , str(self.unroll)],
+        #hyperparametry vrstvy COMPILE             
+            ["loss", str(self.loss)],
+            ["optimizer", str(self.optimizer)],
+            ["metrics", str(self.metrics)],
+            ["loss_weights", str(self.loss_weights)],
+            ["sample_weight_mode", str(self.sample_weight_mode)],
+            ["weighted_metrics", str(self.weighted_metrics)],
+            ["target_tensors", str(self.target_tensors)],
+        #hyperparametry vrstvy FIT                 
+            ["batch_size", str(self.batch_size)],
+            ["epochs", str(self.epochs)],
+            ["verbose", str(self.verbose)],
+            ["callbacks", str(self.callbacks)],
+            ["validation_split", str(self.validation_split)],
+            ["shuffle", str(self.shuffle)],
+            ["class_weight", str(self.class_weight)],
+            ["sample_weight", str(self.sample_weight)],
+            ["initial_epoch", str(self.initial_epoch)],
+            ["steps_per_epoch", str(self.steps_per_epoch)],
+            ["validation_steps", str(self.validation_steps)],
+            ["validation_batch_size", str(self.validation_batch_size)],
+            ["validation_freq", str(self.validation_freq)],
+            ["max_queue_size", str(self.max_queue_size)],
+            ["workers", str(self.workers)],
+            ["use_multiprocessing", str(self.use_multiprocessing)]];
+
+        str_json = "[";
+        for rows in parms[0:]:
+            row = "{\"parm\" : \"" + rows[0] + "\", \"val\" : \"" + rows[1] + "\"},\n";
+            str_json += row;
+            
+        str_json = str_json[:-2] + "]"
+        return(str_json);
+
+      
 
 #---------------------------------------------------------------------------
 # Neuronova Vrstava GRU
@@ -1619,7 +2184,7 @@ class NeuronLayerGRU():
         y_dataset: object              #vstupni data
         cols:      int                 #pocet sloupcu v datove sade
 
-    def __init__(self, path_to_result, typ, model, epochs, batch, txdat1, txdat2, window, units=256, shuffling=True, actf="tanh"):
+    def __init__(self, path_to_result, typ, model, epochs, batch, txdat1, txdat2, window, units=256, shuffling=True, actf="tanh", current_date="-"):
         
         self.path_to_result = path_to_result; 
         self.typ = typ;
@@ -1637,17 +2202,72 @@ class NeuronLayerGRU():
         self.units = units;
         self.shuffling = shuffling;
         self.actf = actf;
-        
+        self.current_date=current_date;
+
         self.x_train_scaler = None;
         self.y_train_scaler = None;
         self.x_valid_scaler = None;
         self.y_valid_scaler = None;
+
+        #hyperparametry hidden vrstev GRU
+        self.activation="tanh";
+        self.recurrent_activation="sigmoid";
+        self.use_bias=True;
+        self.kernel_initializer="glorot_uniform";
+        self.recurrent_initializer="orthogonal";
+        self.bias_initializer="zeros";
+        self.kernel_regularizer=None;
+        self.recurrent_regularizer=None;
+        self.bias_regularizer=None;
+        self.activity_regularizer=None;
+        self.kernel_constraint=None;
+        self.recurrent_constraint=None;
+        self.bias_constraint=None;
+        self.dropout=0.0;
+        self.recurrent_dropout=0.0;
+        self.return_sequences=True;
+        self.return_state=False;
+        self.go_backwards=False;
+        self.stateful=False;
+        self.unroll=False;
+        self.time_major=False;
+        self.reset_after=True;
+        self.layers_count=2;
+        
+        #hyperparametry vrstvy COMPILE
+        self.loss="categorical_crossentropy"; #"mse", 
+        self.optimizer="Adadelta"; #"SGD", "RMSprop","Adam", "Adadelta", "Adagrad", "Adamax", "Nadam", "Ftrl"
+        self.metrics=['mse', 'acc'];
+        self.loss_weights = None; 
+        self.sample_weight_mode = None; 
+        self.weighted_metrics = None; 
+        self.target_tensors = None;
+
+        #hyperparametry vrstvy FIT
+        self.batch_size=self.batch;
+        self.epochs=self.epochs;
+        self.verbose="auto";
+        self.callbacks=None;
+        self.validation_split=0.0;
+        self.shuffle=True;
+        self.class_weight=None;
+        self.sample_weight=None;
+        self.initial_epoch=0;
+        self.steps_per_epoch=None;
+        self.validation_steps=None;
+        self.validation_batch_size=None;
+        self.validation_freq=1;
+        self.max_queue_size=10;
+        self.workers=1;
+        self.use_multiprocessing=False;
 
         
     #---------------------------------------------------------------------------
     # Neuronova Vrstava GRU 
     #---------------------------------------------------------------------------
     def neuralNetworkGRUtrain(self, DataTrain):
+        
+        #velikost okna....
         window_X = self.window;
         window_Y =  1;
         
@@ -1689,16 +2309,41 @@ class NeuronLayerGRU():
         #vystupni data pro trenink -3D tenzor
             Y_valid = DataFactory.toTensorGRU(y_valid_data, window=window_Y);
             Y_valid.X_dataset = Y_valid.X_dataset[0 : X_valid.X_dataset.shape[0]];
-            
-        # neuronova sit
+
+
             model = Sequential();
+        #input vrstva    
             model.add(Input(shape=(X_train.X_dataset.shape[1], X_train.cols,)));
-            model.add(GRU(units = self.units, return_sequences=True));
-            model.add(Dropout(0.2));
-            model.add(GRU(units = self.units, return_sequences=True));
-            model.add(Dropout(0.2));
-            model.add(GRU(units = self.units, return_sequences=True));
-            model.add(layers.Dense(Y_train.cols, activation='relu'));
+        #hidden vrstva
+            for i in range(self.layers_count):
+                model.add(GRU(units = self.units,
+                              activation = self.activation,
+                              recurrent_activation = self.recurrent_activation,
+                              use_bias = self.use_bias,
+                              kernel_initializer = self.kernel_initializer,
+                              recurrent_initializer = self.recurrent_initializer,
+                              bias_initializer = self.bias_initializer,
+                              kernel_regularizer = self.kernel_regularizer,
+                              recurrent_regularizer = self.recurrent_regularizer,
+                              bias_regularizer = self.bias_regularizer,
+                              activity_regularizer = self.activity_regularizer,
+                              kernel_constraint = self.kernel_constraint,
+                              recurrent_constraint = self.recurrent_constraint,
+                              bias_constraint = self.bias_constraint,
+                              dropout = self.dropout,
+                              recurrent_dropout = self.recurrent_dropout,
+                              return_sequences = self.return_sequences,
+                              return_state = self.return_state,
+                              go_backwards = self.go_backwards,
+                              stateful = self.stateful,
+                              unroll = self.unroll,
+                              time_major = self.time_major,
+                              reset_after = self.reset_after
+                           ));
+                #model.add(GRU(units = self.units, return_sequences=True));
+                model.add(Dropout(0.2));
+        #output vrstva    
+            model.add(layers.Dense(Y_train.cols, activation='elu'));
 
         # definice ztratove funkce a optimalizacniho algoritmu
             model.compile(loss='mse', optimizer='adam', metrics=['mse', 'acc']);
@@ -1713,6 +2358,7 @@ class NeuronLayerGRU():
                             );
 
         # start point grafu - kolik se vynecha na zacatku
+              
             start_point = 1;
 
             loss_train = history.history['loss'];
@@ -1827,10 +2473,13 @@ class NeuronLayerGRU():
     # neuralNetworkGRUexec
     #------------------------------------------------------------------------
     def neuralNetworkGRUexec(self):
+
         
         try:
-            print("Pocet GPU jader: ", len(tf.config.experimental.list_physical_devices('GPU')))
-            self.data = DataFactory(path_to_result=self.path_to_result, window=self.window);
+            self.data =  DataFactory(path_to_result = self.path_to_result, 
+                                     window = self.window, 
+                                     hyperparms = self.getGRUhyperparms());
+                                    
             self.graph = GraphResult(path_to_result=self.path_to_result, 
                                      model=self.model, 
                                      type=self.typ,
@@ -1844,8 +2493,22 @@ class NeuronLayerGRU():
                                 );
         
             shuffling = False;
+            
             if self.typ == 'predict':
                 self.shuffling = False;
+                
+            parms = [self.typ,
+                     self.model,
+                     self.epochs,
+                     self.units,
+                     self.batch,
+                     self.actf,
+                     str(self.shuffling), 
+                     self.txdat1, 
+                     self.txdat2,
+                     str(self.current_date)];
+            
+            self.data.setParms(parms);
         
             self.data.Data = self.data.getData(shuffling=self.shuffling, timestamp_start=self.txdat1, timestamp_stop=self.txdat2);
 
@@ -1856,16 +2519,83 @@ class NeuronLayerGRU():
             else:
                 self.neuralNetworkGRUexec_x(data=self.data, graph=self.graph);
             
-        
+            global save_model;
     # archivuj vyrobeny model site            
-            if self.typ == 'train':
-                saveModelToArchiv(model="GRU", dest_path=self.path_to_result, data=self.data);
+            if self.typ == 'train' and save_model: 
+                saveModelToArchiv(model="LSTM", dest_path=self.path_to_result, data=self.data);
             return(0);
 
         except Exception as ex:
             traceback.print_exc();
             logging.error(traceback.print_exc());
 
+
+#------------------------------------------------------------------------
+# getter setter
+#------------------------------------------------------------------------
+    def getGRUhyperparms(self):
+        parms = [
+        #hyperparametry hidden vrstev <GRU>
+        ["activation",            str(self.activation)],             
+        ["recurrent_activation",  str(self.recurrent_activation)],   
+        ["use_bias",              str(self.use_bias)],               
+        ["kernel_initializer",    str(self.kernel_initializer)],     
+        ["recurrent_initializer", str(self.recurrent_initializer)],  
+        ["bias_initializer",      str(self.bias_initializer)],       
+        ["kernel_regularizer",    str(self.kernel_regularizer)],     
+        ["recurrent_regularizer", str(self.recurrent_regularizer)],  
+        ["bias_regularizer",      str(self.bias_regularizer)],       
+        ["activity_regularizer",  str(self.activity_regularizer)],   
+        ["kernel_constraint",     str(self.kernel_constraint)],      
+        ["recurrent_constraint",  str(self.recurrent_constraint)],   
+        ["bias_constraint",       str(self.bias_constraint)],        
+        ["dropout",               str(self.dropout)],                
+        ["recurrent_dropout",     str(self.recurrent_dropout)],      
+        ["return_sequences",      str(self.return_sequences)],       
+        ["return_state",          str(self.return_state)],           
+        ["go_backwards",          str(self.go_backwards)],           
+        ["stateful",              str(self.stateful)],               
+        ["unroll",                str(self.unroll)],                 
+        ["time_major",            str(self.time_major)],             
+        ["reset_after",           str(self.reset_after)],            
+        ["layers_count",          str(self.layers_count)],           
+                                       
+        #hyperparametry vrstvy COMPILE hyperparametry vrstvy COMPILE
+        ["loss",                  str(self.loss)],                  
+        ["optimizer",             str(self.optimizer)],              
+        ["metrics",               str(self.metrics)],                
+        ["loss_weights ",         str(self.loss_weights )],          
+        ["sample_weight_mode ",   str(self.sample_weight_mode )],    
+        ["weighted_metrics ",     str(self.weighted_metrics )],      
+        ["target_tensors ",       str(self.target_tensors )],        
+                                       
+        #hyperparametry vrstvy FIT     hyperparametry vrstvy FIT
+        ["batch_size",            str(self.batch_size)],             
+        ["epochs",                str(self.epochs)],                 
+        ["verbose",               str(self.verbose)],                
+        ["callbacks",             str(self.callbacks)],              
+        ["validation_split",      str(self.validation_split)],       
+        ["shuffle",               str(self.shuffle)],                
+        ["class_weight",          str(self.class_weight)],           
+        ["sample_weight",         str(self.sample_weight)],          
+        ["initial_epoch",         str(self.initial_epoch)],          
+        ["steps_per_epoch",       str(self.steps_per_epoch)],        
+        ["validation_steps",      str(self.validation_steps)],       
+        ["validation_batch_size", str(self.validation_batch_size)],  
+        ["validation_freq",       str(self.validation_freq)],        
+        ["max_queue_size",        str(self.max_queue_size)],         
+        ["workers",               str(self.workers)],                
+        ["use_multiprocessing",   str(self.use_multiprocessing)]];
+
+        str_json = "[";
+        for rows in parms[0:]:
+            row = "{\"parm\" : \"" + rows[0] + "\", \"val\" : \"" + rows[1] + "\"},\n";
+            str_json += row;
+            
+        str_json = str_json[:-2] + "]"
+        return(str_json);
+
+      
 
 
 #---------------------------------------------------------------------------
@@ -1881,7 +2611,7 @@ class NeuronLayerBIDI():
         y_dataset: object              #vstupni data
         cols:      int                 #pocet sloupcu v datove sade
 
-    def __init__(self, path_to_result, typ, model, epochs, batch, txdat1, txdat2, window, units=256, shuffling=True, actf="tanh"):
+    def __init__(self, path_to_result, typ, model, epochs, batch, txdat1, txdat2, window, units=256, shuffling=True, actf="tanh", current_date=""):
         
         self.path_to_result = path_to_result; 
         self.typ = typ;
@@ -1899,11 +2629,67 @@ class NeuronLayerBIDI():
         self.units = units;
         self.shuffling = shuffling;
         self.actf = actf;
-        
+        self.current_date=current_date;
+
         self.x_train_scaler = None;
         self.y_train_scaler = None;
         self.x_valid_scaler = None;
         self.y_valid_scaler = None;
+
+
+        #hyperparametry hidden vrstev GRU
+        self.activation="tanh";
+        self.recurrent_activation="sigmoid";
+        self.use_bias=True;
+        self.kernel_initializer="glorot_uniform";
+        self.recurrent_initializer="orthogonal";
+        self.bias_initializer="zeros";
+        self.kernel_regularizer=None;
+        self.recurrent_regularizer=None;
+        self.bias_regularizer=None;
+        self.activity_regularizer=None;
+        self.kernel_constraint=None;
+        self.recurrent_constraint=None;
+        self.bias_constraint=None;
+        self.dropout=0.0;
+        self.recurrent_dropout=0.0;
+        self.return_sequences=True;
+        self.return_state=False;
+        self.go_backwards=False;
+        self.stateful=False;
+        self.unroll=False;
+        self.time_major=False;
+        self.reset_after=True;
+        self.layers_count=2;
+        
+        #hyperparametry vrstvy COMPILE
+        self.loss="categorical_crossentropy"; #"mse", 
+        self.optimizer="Adadelta"; #"SGD", "RMSprop","Adam", "Adadelta", "Adagrad", "Adamax", "Nadam", "Ftrl"
+        self.metrics=['mse', 'acc'];
+        self.loss_weights = None; 
+        self.sample_weight_mode = None; 
+        self.weighted_metrics = None; 
+        self.target_tensors = None;
+
+        #hyperparametry vrstvy FIT
+        self.batch_size=self.batch;
+        self.epochs=self.epochs;
+        self.verbose="auto";
+        self.callbacks=None;
+        self.validation_split=0.0;
+        self.shuffle=True;
+        self.class_weight=None;
+        self.sample_weight=None;
+        self.initial_epoch=0;
+        self.steps_per_epoch=None;
+        self.validation_steps=None;
+        self.validation_batch_size=None;
+        self.validation_freq=1;
+        self.max_queue_size=10;
+        self.workers=1;
+        self.use_multiprocessing=False;
+
+        
         
     #---------------------------------------------------------------------------
     # Neuronova Vrstava BIDI 
@@ -1953,12 +2739,36 @@ class NeuronLayerBIDI():
             
         # neuronova sit
             model = Sequential();
+
             model.add(Input(shape=(X_train.X_dataset.shape[1], X_train.cols,)));
-            model.add(layers.Bidirectional(GRU(units = self.units, return_sequences=True)));
-            model.add(Dropout(0.2));
-            model.add(layers.Bidirectional(GRU(units = self.units, return_sequences=True)));
-            model.add(Dropout(0.2));
-            model.add(layers.Bidirectional(GRU(units = self.units, return_sequences=True)));
+            
+            for i in range(self.layers_count):
+                model.add(layers.Bidirectional(GRU(units = self.units,
+                              activation = self.activation,
+                              recurrent_activation = self.recurrent_activation,
+                              use_bias = self.use_bias,
+                              kernel_initializer = self.kernel_initializer,
+                              recurrent_initializer = self.recurrent_initializer,
+                              bias_initializer = self.bias_initializer,
+                              kernel_regularizer = self.kernel_regularizer,
+                              recurrent_regularizer = self.recurrent_regularizer,
+                              bias_regularizer = self.bias_regularizer,
+                              activity_regularizer = self.activity_regularizer,
+                              kernel_constraint = self.kernel_constraint,
+                              recurrent_constraint = self.recurrent_constraint,
+                              bias_constraint = self.bias_constraint,
+                              dropout = self.dropout,
+                              recurrent_dropout = self.recurrent_dropout,
+                              return_sequences = self.return_sequences,
+                              return_state = self.return_state,
+                              go_backwards = self.go_backwards,
+                              stateful = self.stateful,
+                              unroll = self.unroll,
+                              time_major = self.time_major,
+                              reset_after = self.reset_after
+                           )));
+                #model.add(GRU(units = self.units, return_sequences=True));
+                model.add(Dropout(0.2));
             model.add(layers.Dense(Y_train.cols, activation='relu'));
 
         # definice ztratove funkce a optimalizacniho algoritmu
@@ -2089,10 +2899,13 @@ class NeuronLayerBIDI():
     # neuralNetworkBIDIexec
     #------------------------------------------------------------------------
     def neuralNetworkBIDIexec(self):
-        
+       
         try:
-            print("Pocet GPU jader: ", len(tf.config.experimental.list_physical_devices('GPU')))
-            self.data = DataFactory(path_to_result=self.path_to_result, window=self.window);
+            self.data =  DataFactory(path_to_result = self.path_to_result, 
+                                     window = self.window, 
+                                     hyperparms = self.getBIDIhyperparms());
+
+            
             self.graph = GraphResult(path_to_result=self.path_to_result, 
                                      model=self.model, 
                                      type=self.typ,
@@ -2108,6 +2921,19 @@ class NeuronLayerBIDI():
             shuffling = False;
             if self.typ == 'predict':
                 self.shuffling = False;
+
+            parms = [self.typ,
+                     self.model,
+                     self.epochs,
+                     self.units,
+                     self.batch,
+                     self.actf,
+                     str(self.shuffling), 
+                     self.txdat1, 
+                     self.txdat2,
+                     str(self.current_date)];
+            
+            self.data.setParms(parms);
         
             self.data.Data = self.data.getData(shuffling=self.shuffling, timestamp_start=self.txdat1, timestamp_stop=self.txdat2);
 
@@ -2118,10 +2944,10 @@ class NeuronLayerBIDI():
             else:
                 self.neuralNetworkBIDIexec_x(data=self.data, graph=self.graph);
             
-        
+            global save_model;
     # archivuj vyrobeny model site            
-            if self.typ == 'train':
-                saveModelToArchiv(model="BIDI", dest_path=self.path_to_result, data=self.data);
+            if self.typ == 'train' and save_model: 
+                saveModelToArchiv(model="LSTM", dest_path=self.path_to_result, data=self.data);
             return(0);
 
         except Exception as ex:
@@ -2129,6 +2955,72 @@ class NeuronLayerBIDI():
             logging.error(traceback.print_exc());
 
 
+#------------------------------------------------------------------------
+# getter setter
+#------------------------------------------------------------------------
+    def getBIDIhyperparms(self):
+        parms = [
+        #hyperparametry hidden vrstev <GRU>
+        ["activation",            str(self.activation)],             
+        ["recurrent_activation",  str(self.recurrent_activation)],   
+        ["use_bias",              str(self.use_bias)],               
+        ["kernel_initializer",    str(self.kernel_initializer)],     
+        ["recurrent_initializer", str(self.recurrent_initializer)],  
+        ["bias_initializer",      str(self.bias_initializer)],       
+        ["kernel_regularizer",    str(self.kernel_regularizer)],     
+        ["recurrent_regularizer", str(self.recurrent_regularizer)],  
+        ["bias_regularizer",      str(self.bias_regularizer)],       
+        ["activity_regularizer",  str(self.activity_regularizer)],   
+        ["kernel_constraint",     str(self.kernel_constraint)],      
+        ["recurrent_constraint",  str(self.recurrent_constraint)],   
+        ["bias_constraint",       str(self.bias_constraint)],        
+        ["dropout",               str(self.dropout)],                
+        ["recurrent_dropout",     str(self.recurrent_dropout)],      
+        ["return_sequences",      str(self.return_sequences)],       
+        ["return_state",          str(self.return_state)],           
+        ["go_backwards",          str(self.go_backwards)],           
+        ["stateful",              str(self.stateful)],               
+        ["unroll",                str(self.unroll)],                 
+        ["time_major",            str(self.time_major)],             
+        ["reset_after",           str(self.reset_after)],            
+        ["layers_count",          str(self.layers_count)],           
+                                       
+        #hyperparametry vrstvy COMPILE hyperparametry vrstvy COMPILE
+        ["loss",                  str(self.loss)],                  
+        ["optimizer",             str(self.optimizer)],              
+        ["metrics",               str(self.metrics)],                
+        ["loss_weights ",         str(self.loss_weights )],          
+        ["sample_weight_mode ",   str(self.sample_weight_mode )],    
+        ["weighted_metrics ",     str(self.weighted_metrics )],      
+        ["target_tensors ",       str(self.target_tensors )],        
+                                       
+        #hyperparametry vrstvy FIT     hyperparametry vrstvy FIT
+        ["batch_size",            str(self.batch_size)],             
+        ["epochs",                str(self.epochs)],                 
+        ["verbose",               str(self.verbose)],                
+        ["callbacks",             str(self.callbacks)],              
+        ["validation_split",      str(self.validation_split)],       
+        ["shuffle",               str(self.shuffle)],                
+        ["class_weight",          str(self.class_weight)],           
+        ["sample_weight",         str(self.sample_weight)],          
+        ["initial_epoch",         str(self.initial_epoch)],          
+        ["steps_per_epoch",       str(self.steps_per_epoch)],        
+        ["validation_steps",      str(self.validation_steps)],       
+        ["validation_batch_size", str(self.validation_batch_size)],  
+        ["validation_freq",       str(self.validation_freq)],        
+        ["max_queue_size",        str(self.max_queue_size)],         
+        ["workers",               str(self.workers)],                
+        ["use_multiprocessing",   str(self.use_multiprocessing)]];
+
+        str_json = "[";
+        for rows in parms[0:]:
+            row = "{\"parm\" : \"" + rows[0] + "\", \"val\" : \"" + rows[1] + "\"},\n";
+            str_json += row;
+            
+        str_json = str_json[:-2] + "]"
+        return(str_json);
+
+      
 
 #------------------------------------------------------------------------
 # saveModelToArchiv - zaloha modelu, spusteno jen pri parametru train
@@ -2163,7 +3055,7 @@ def saveModelToArchiv(model, dest_path, data):
 def setEnv(path, model, type, parms):
 
         progname = os.path.basename(__file__);
-        current_date =  datetime.now().strftime("%Y-%m-%d_%H:%M:%S");
+        current_date =  datetime.now().strftime("%Y-%m-%d %H:%M:%S");
         path1 = path+model+"_3D";
         path2 = path1+"/"+current_date+"_"+type
                 
@@ -2231,7 +3123,7 @@ def setEnv(path, model, type, parms):
             
         
     
-        return path2    
+        return path2, current_date;    
 
 #------------------------------------------------------------------------
 # Exception handler
@@ -2312,6 +3204,8 @@ def help (activations):
     print ("                                 parametry txdat1, txdat2 jsou nepovinne. Pokud nejsou uvedeny, bere");
     print ("                                 se v uvahu cela mnozina dat k trenovani.");
     print (" ");
+    print ("        --gpu             Vypocet na GPU   <True, False>")
+    print ("                                 Pokud gpu parametr neni uveden, je implicitne nastaven na 'False'."); 
     print (" ");
     print (" ");
     print ("priklad: ./ai-neuro.py -t train, -m DENSE, -e 64 -b 128 -s True -af sigmoid -t1 2022-04-09 08:00:00 -t2 2022-04-09 12:00:00");
@@ -2392,7 +3286,22 @@ def main(argv):
     global g_window;
     g_window = 48;
     
+    global save_model;
+    save_model = False;
+    
     startTime = datetime.now();
+    
+    physical_devices = [];
+    parm1 = "";
+    parm2 = "";
+    parm3 = 0;
+    parm4 = 0;
+    parm5 = 0;
+    txdat1 = "";
+    txdat2 = "";
+    shuffling = True;
+    actf = "tanh";
+    is_gpu = False;
 
     activations = [["deserialize","Returns activation function given a string identifier"],
                    ["elu","Exponential Linear Unit"],
@@ -2409,29 +3318,22 @@ def main(argv):
                    ["softplus","Softplus activation function: softplus(x) = log(exp(x) + 1)"],
                    ["softsign","Softsign activation function: softsign(x) = x / (abs(x) + 1)"],
                    ["swish","Swish activation function: swish(x) = x * sigmoid(x)"],
-                   ["tanh","Hyperbolic tangent activation function"]];
+                   ["tanh","Hyperbolic tangent activation function"],
+                   ["none","pro site typu GRU a LSTM"]];
     
     try:
         parm0 = sys.argv[0];
      
-        parm1 = "";
-        parm2 = "";
-        parm3 = 0;
-        parm4 = 0;
-        parm5 = 0;
-        txdat1 = "";
-        txdat2 = "";
-        shuffling = True;
-        actf = "tanh";
 
         txdat_format = "%Y-%m-%d %h:%m:%s"
         try:
-            opts, args = getopt.getopt(sys.argv[1:],"ht:m:e:b:u:s:af:t1:t2:h:x",["typ=", "model=", "epochs=", "batch=", "units=", "shuffle=","actf=", "txdat1=","txdat2=", "help="])
+            opts, args = getopt.getopt(sys.argv[1:],"ht:m:e:b:u:s:af:g:t1:t2:h:x",["typ=", "model=", "epochs=", "batch=", "units=", "shuffle=","actf=", "txdat1=","txdat2=", "gpu=", "help="])
         except getopt.GetoptError:
             print("Chyba pri parsovani parametru:");
             help(activations);
             
         for opt, arg in opts:
+
             if opt in ("-t", "--typ"):
                 parm1 = arg;
             elif opt in ("-m", "--model"):
@@ -2509,6 +3411,12 @@ def main(argv):
                 else:
                     shuffling = False;    
 
+            elif opt in ["-g","--gpu"]:
+                if arg.upper() == "TRUE":
+                    is_gpu = True;
+                else:
+                    is_gpu = False;    
+
             elif opt in ["-h","--help"]:
                 help(activations);
                 sys.exit(0);
@@ -2526,15 +3434,39 @@ def main(argv):
                 " shuffle="+str(shuffling)+\
                 " txdat1="+txdat1+\
                 " txdat2="+txdat2+\
-                " actf="+actf; 
-                    
+                " actf="+actf;
+
         logging.info(parms);
-        path_to_result = setEnv(path=path_to_result, model=parm2, type=parm1, parms=parms);
+        path_to_result, current_date = setEnv(path=path_to_result, model=parm2, type=parm1, parms=parms);
+
+                    
+        
 
         startTime = datetime.now();
         logging.info("start...");
         logging.info("Verze TensorFlow :" + tf.__version__)
         print("Verze TensorFlow :", tf.__version__)
+
+        if is_gpu: 
+            #postupna alokace pameti GPU           
+            try:
+                physical_devices = tf.config.list_physical_devices('GPU')
+                tf.config.experimental.set_memory_growth(physical_devices[0], enable=True)
+                print("GPU device count: ", len(tf.config.experimental.list_physical_devices('GPU')))
+                logging.info("GPU device count: "+ str(len(tf.config.experimental.list_physical_devices('GPU'))));
+    
+            except ValueError as ex:
+                print("Invalid device");
+    
+            except RuntimeError as ex:
+                print("Cannot modify virtual devices once initialized.");
+    
+            except:
+                print("Invalid device or cannot modify virtual devices once initialized.");
+        else:        
+            print("Vypocet na GPU nebude proveden......");
+            
+        
         
         if parm2 == "LSTM":
             actf = "tanh";
@@ -2548,7 +3480,8 @@ def main(argv):
                                      window=g_window,
                                      units=parm5,
                                      shuffling=shuffling, 
-                                     actf=actf 
+                                     actf=actf,
+                                     current_date=current_date 
                                 );
             neural.neuralNetworkLSTMexec();
             
@@ -2563,7 +3496,8 @@ def main(argv):
                                      window=g_window,
                                      units=parm5,
                                      shuffling=shuffling,
-                                     actf=actf 
+                                     actf=actf, 
+                                     current_date=current_date 
                                 );
             neural.neuralNetworkDENSEexec();
             
@@ -2579,7 +3513,8 @@ def main(argv):
                                      window=g_window,
                                      units=parm5,
                                      shuffling=shuffling,  
-                                     actf=actf 
+                                     actf=actf, 
+                                     current_date=current_date 
                                 );
             neural.neuralNetworkGRUexec();
             
@@ -2595,7 +3530,8 @@ def main(argv):
                                      window=g_window,
                                      units=parm5,
                                      shuffling=shuffling,  
-                                     actf=actf 
+                                     actf=actf, 
+                                     current_date=current_date 
                                 );
             neural.neuralNetworkBIDIexec();
             
@@ -2607,6 +3543,12 @@ def main(argv):
         help(activations);
         
     finally:    
+                
+        if is_gpu:
+            #nastav gpu pamet do vychozi polohy
+            tf.config.experimental.reset_memory_stats("GPU:0")
+            print("GPU:0 mem free....");
+            
         stopTime = datetime.now();
         print("cas vypoctu [s]", stopTime - startTime );
         logging.info("cas vypoctu [s] %s",  str(stopTime - startTime));

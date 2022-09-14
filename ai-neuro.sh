@@ -1,9 +1,11 @@
 #!/bin/bash
 FILE_PATH=$(pwd)
 
+ISGPU="True"
 export PYTHONPATH="/home/plukasik/miniconda3/pkgs:$PYTHONPATH"
 export CONDA_HOME="/home/plukasik/miniconda3"
 export PATH=${CONDA_HOME}/bin:${PATH}
+cd ~/ai/ai-neuro/src
 
 
 ai-help_() {
@@ -47,6 +49,10 @@ ai-help_() {
       echo "                           Pokud shuffle neni uveden, implicitne"
       echo "                           je nastaven na True."
       echo "        "
+      echo "            -af<--actf>   -Aktivacni funkce - jen pro model DENSE"
+      echo "                           Pokud aktivacni funkce neni uvedena  "
+      echo "                           je implicitne nastavena na 'tanh'."
+      echo "        "
       echo "            -t1 <--txdat1>-timestamp start 'YYYY-MM-DD HH:MM:SS'"
       echo "            -t2 <--txdat2>-timestamp stop 'YYYY-MM-DD HH:MM:SS'"
       echo "                           timestampy urcuji v jakem intervalu   "
@@ -55,7 +61,11 @@ ai-help_() {
       echo "                           je do zpracovani vybrana cela mnozina "
       echo "                           dat urcena pro predikci.  "
       echo "                                         "
-      echo "PRIKLAD: ./ai-neuro.sh -t=predict -m=DENSE -e=64 -b=128 -u=512 -s=TRUE -t1='2022-04-09 08:00:00' -t2='2022-04-09 12:00:00'"
+      echo "            -g <--gpu>    -Vypocet na GPU <True,False>"
+      echo "                           Pokud gpue neni uveden, implicitne"
+      echo "                           je nastaven na False."
+      echo "                                         "
+      echo "PRIKLAD: ./ai-neuro.sh -t=predict -m=DENSE -e=64 -b=128 -u=512 -s=TRUE -ac=relu -g=True -t1='2022-04-09 08:00:00' -t2='2022-04-09 12:00:00'"
 
 }
 
@@ -94,12 +104,20 @@ for i in "$@"; do
 	SHUFFLE="${i#*=}"
 	shift # past argument=value
         ;;
+    -af=*|--actf=*)
+	ACTF="${i#*=}"
+	shift # past argument=value
+        ;;
     -t1=*|--txdat1=*)
 	TXDAT1="${i#*=}"
 	shift # past argument=value
         ;;
     -t2=*|--txdat2=*)
 	TXDAT2="${i#*=}"
+	shift # past argument=value
+        ;;
+     -g=*|--gpu=*)
+	GPU="${i#*=}"
 	shift # past argument=value
         ;;
     -*|--*)
@@ -112,14 +130,19 @@ for i in "$@"; do
   esac
 done
 
-echo "bash: Spusteno s parametry: TYP=" $TYP" MODEL="$MODEL" EPOCHS="$EPOCHS" BATCH="$BATCH"  UNITS="$UNITS" SHUFFLE="$SHUFFLE" TXDAT1="$TXDAT1" TXDAT2="$TXDAT2
+echo "bash: Spusteno s parametry: TYP=" $TYP" MODEL="$MODEL" EPOCHS="$EPOCHS" BATCH="$BATCH"  UNITS="$UNITS" SHUFFLE="$SHUFFLE" ACTF="$ACTF" TXDAT1="$TXDAT1" TXDAT2="$TXDAT2" GPU="$GPU 
 curr_timestamp=`date "+%Y-%m-%d %H:%M:%S"`
 echo "Start ulohy: "$curr_timestamp
-cd ~/ai/src
 eval "$(conda shell.bash hook)"
-conda activate tf
-echo "Aproximace prubehu funkci, sit typu " $MODEL " pro jednotlive osy X,Y,Z"
-python3 ai-neuro.py --typ "$TYP" --model "$MODEL" --epochs "$EPOCHS" --batch "$BATCH" --units "$UNITS" --shuffle "$SHUFFLE" --txdat1="$TXDAT1" --txdat2="$TXDAT2"
+
+if [ "$GPU" = "True" ]; then
+    conda activate tf-gpu
+else     
+    conda activate tf
+fi    
+    
+echo "Aproximace prubehu funkci, sit typu " $MODEL " pro osy X,Y,Z"
+python3 ai-neuro.py --typ "$TYP" --model "$MODEL" --epochs "$EPOCHS" --batch "$BATCH" --units "$UNITS" --shuffle "$SHUFFLE" --gpu "$GPU" --actf "$ACTF" --txdat1="$TXDAT1" --txdat2="$TXDAT2"
 conda deactivate
 curr_timestamp=`date "+%Y-%m-%d %H:%M:%S"`
 echo "Stop ulohy: "$curr_timestamp

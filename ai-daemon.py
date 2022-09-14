@@ -60,8 +60,6 @@ import lockfile;
 
 import logging;
 from signal import SIGTERM
-#import IPython
-#import IPython.display
 import glob as glob;
 import pandas as pd;
 import seaborn as sns;
@@ -69,22 +67,30 @@ import tensorflow as tf;
 import math;
 import numpy as np;
 import shutil;
+from matplotlib import cm;
 import matplotlib as mpl;
 import matplotlib.pyplot as plt;
 import platform;
-from lockfile.pidlockfile import PIDLockFile
+import pandas.api.types as ptypes
+import pickle;
+
+from lockfile.pidlockfile import PIDLockFile;
+from os.path import exists;
 
 from dateutil import parser
 from sklearn.preprocessing import MinMaxScaler;
 from sklearn.metrics import mean_squared_error;
 from sklearn.metrics import max_error;
-from sklearn.utils import shuffle
+from sklearn.utils import shuffle;
+from sklearn.utils import assert_all_finite;
 from numpy import asarray;
-#from matplotlib import pyplot;
+
 from dataclasses import dataclass;
-from datetime import datetime
-from tabulate import tabulate
-from pathlib import Path
+from datetime import datetime, timedelta, timezone;
+from tabulate import tabulate;
+from pathlib import Path;
+from daemon import pidfile;
+from pandas.core.frame import DataFrame
 
 #from tensorflow.keras.datasets import imdb;
 from tensorflow.keras import models;
@@ -103,66 +109,82 @@ from tensorflow.keras.layers import Conv1D;
 from tensorflow.keras.layers import Dropout
 from tensorflow.keras.models import load_model
 #from keras.utils.vis_utils import plot_model
-from matplotlib import cm;
+
 from _cffi_backend import string
-from pandas.core.frame import DataFrame
 
 from scipy.signal import butter, lfilter, freqz
 
 from opcua import ua
 from opcua import *
+from opcua.common.ua_utils import data_type_to_variant_type
 
 from subprocess import call;
 from plistlib import InvalidFileException
+from tensorflow.python.eager.function import np_arrays
+from pandas.errors import EmptyDataError
+from keras.saving.utils_v1.mode_keys import is_train
 
 
 
 #---------------------------------------------------------------------------
 # nastaveni globalnich parametru logu pro demona
 #---------------------------------------------------------------------------
-
-'''
-global logger;
-global log_handler;
-
 logger = None;
 log_handler = None;
-
-progname = os.path.basename(__file__);
-
-logging.basicConfig(filename="./log/"+progname+".log",
-                    filemode='a',
-                    level=logging.INFO,
-                    format='%(asctime)s - %(message)s',
-                    datefmt='%Y-%m-%d %H:%M:%S');
-
-log_handler = logging.StreamHandler();
-
-print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>LOG_HANDLER", log_handler);
-logger = logging.getLogger("parent");
-logger.addHandler(log_handler)
-'''
+df_debug_count=0;
+df_debug_header=[];
 
 #---------------------------------------------------------------------------
-# DataFactory
+# OPCAgent
 #---------------------------------------------------------------------------
 class OPCAgent():
+
+    @dataclass
+    class PLCData:
+    # osy XYZ
+        CompX:     object              #Aktualni hodnota kompenzace v ose X
+        CompY:     object              #Aktualni hodnota kompenzace v ose Y
+        CompZ:     object              #Aktualni hodnota kompenzace v ose Z
+    # osy rotace AC
+        CompA:     object              #Aktualni hodnota kompenzace v ose A
+        CompC:     object              #Aktualni hodnota kompenzace v ose C
+        
+    # osy XYZ
+        setCompX:     object           #Predikovana hodnota kompenzace v ose X
+        setCompY:     object           #Predikovana hodnota kompenzace v ose Y
+        setCompZ:     object           #Predikovana hodnota kompenzace v ose Z
+    # osy rotace AC
+        setCompA:     object           #Predikovana hodnota kompenzace v ose A
+        setCompC:     object           #Predikovana hodnota kompenzace v ose C
+        
     
     # konstrukter    
-    def __init__(self):
-        self.prefix = "opc.tcp://";
-        self.host1   = "opc998.os.zps"; # BR-PLC
-        self.port1  = "4840";
-        self.host2   = "opc999.os.zps";# HEIDENHANIN-PLC
-        self.port2  = "48010";
-        self.is_ping = False;
+    def __init__(self, logger, batch):
+        self.prefix       = "opc.tcp://";
+        self.host1        = "opc998.os.zps"; # BR-PLC
+        self.port1        = "4840";
+        self.host2        = "opc999.os.zps";# HEIDENHANIN-PLC
+        self.port2        = "48010";
+        self.is_ping      = False;
+        self.logger       = logger;
+        self.batch        = batch;
+        self.plc_interval = 500/1000; # 500 [ms] sekunda(y)
+        
+        self.df_debug     = pd.DataFrame();
+        self.uri1         = self.prefix+self.host1+":"+self.port1;
+        self.uri2         = self.prefix+self.host2+":"+self.port2;
         
     #---------------------------------------------------------------------------
-    # myformat         
+    # myFloatFormat         
     #---------------------------------------------------------------------------
-    def myformat(self, x):
-        
-        return ('%.4f' % x).rstrip('0').rstrip('.');
+    def myFloatFormat(self, x):
+        return ('%.6f' % x).rstrip('0').rstrip('.');
+
+    #---------------------------------------------------------------------------
+    # myIntFormat         
+    #---------------------------------------------------------------------------
+    def myIntFormat(self, x):
+        return ('%.f' % x).rstrip('.');
 
 
     #---------------------------------------------------------------------------
@@ -190,12 +212,13 @@ class OPCAgent():
                                                                                                             
         
     #---------------------------------------------------------------------------
-    # opcCollectorTemp - nacti teploty
+    # opcCollectorBR_PLC - opc server BR
     #---------------------------------------------------------------------------
     def opcCollectorBR_PLC(self):
         
+        global plc_isRunning;
+        
         plc_isRunning = True;
-        uri = self.prefix+self.host1+":"+self.port1;
         # tabulka nodu v br plc         
         plc_br_table        = np.array([["temp_ch01",     "ns=6;s=::AsGlobalPV:teplota_ch01"],
                                         ["temp_lo01",     "ns=6;s=::AsGlobalPV:teplota_lo01"],
@@ -229,28 +252,29 @@ class OPCAgent():
                                         ["temp_ambient",  "ns=6;s=::AsGlobalPV:vstup_teplota"],
                                         ["humid_ambient", "ns=6;s=::AsGlobalPV:vstup_vlhkost"]]);
 
-        if not self.ping_(self.host1):
-            plc_isRunning = False;
-            return(plc_br_table, plc_isRunning);
+        #if not self.ping_(self.host1):
+        #    plc_isRunning = False;
+        #    return(plc_br_table, plc_isRunning);
    
-        client = Client(uri)
+        client = Client(self.uri1)
         try:        
             client.connect();
-            sys.stderr.write("Client" + uri+ "Connected\n");
-            #logger.info("Client" + uri+ "Connected")
+            #sys.stderr.write("Client" + uri+ "Connected\n");
+            #self.logger.info("Client" + uri+ "Connected")
             plc_br_table = np.c_[plc_br_table, np.zeros(len(plc_br_table))];
             
             for i in range(len(plc_br_table)):
                 node = client.get_node(str(plc_br_table[i, 1]));
                 typ  = type(node.get_value());
-                val = self.myformat(node.get_value()) if typ is float else node.get_value();
+                val = float(self.myFloatFormat(node.get_value())) if typ is float else node.get_value();
+                #val = node.get_value() if typ is float else node.get_value();
                 plc_br_table[i, 2] = val;
             
             
         except Exception as ex:
             traceback.print_exc();
             sys.stderr.write(str(traceback.print_exc())+"\n");
-            #logger.error(traceback.print_exc());
+            self.logger.error(traceback.print_exc());
             plc_isRunning = False;
             
         finally:
@@ -260,12 +284,12 @@ class OPCAgent():
 
 
     #---------------------------------------------------------------------------
-    # opcCollectorTemp - nacti PLC HEIDENHAIN
+    # opcCollectorHH_PLC - opc server PLC HEIDENHAIN
     #---------------------------------------------------------------------------
     def opcCollectorHH_PLC(self):
         
+        global plc_isRunning;
         plc_isRunning = True;
-        uri = self.prefix+self.host2+":"+self.port2;
         #tabulka nodu v plc heidenhain
         plc_hh_table        = np.array([["datetime",     ""],
                                         ["tool",         "ns=2;s=Technology data.ACTUAL_TOOL_T"],
@@ -309,53 +333,212 @@ class OPCAgent():
                                         ["dev_z5",       ""]]);
                                         
                                         
-        if not self.ping_(self.host2):
-            plc_isRunning = False;
-            return(plc_hh_table, plc_isRunning);
+        #if not self.ping_(self.host2):
+        #    plc_isRunning = False;
+        #    return(plc_hh_table, plc_isRunning);
                                                     
-        client = Client(uri);
+        client = Client(self.uri2);
         try:        
             client.connect();
-            sys.stderr.write("Client" + uri+ "Connected\n");
-            #logger.info("Client" + uri+ "Connected")
+            #sys.stderr.write("Client" + uri+ "Connected\n");
+            #self.logger.info("Client" + uri+ "Connected")
             
             plc_hh_table = np.c_[plc_hh_table, np.zeros(len(plc_hh_table))];
             
             for i in range(len(plc_hh_table)):
                 if "datetime" in plc_hh_table[i, 0]:
-                    plc_hh_table[i, 2] = datetime.now().strftime("%Y-%m-%d_%H:%M:%S");
+                    plc_hh_table[i, 2] = datetime.now().strftime("%Y-%m-%d %H:%M:%S");
                 else:
                     if plc_hh_table[i, 1]:
                         node = client.get_node(str(plc_hh_table[i, 1]));
                         typ  = type(node.get_value());
-                        val = self.myformat(node.get_value()) if typ is float else node.get_value();
+                        val = float(self.myFloatFormat(node.get_value())) if typ is float else node.get_value();
+                        #val = node.get_value() if typ is float else node.get_value();
                         plc_hh_table[i, 2] = val;
             
         except OSError as ex:
             traceback.print_exc();
             sys.stderr.write(str(traceback.print_exc()));
-            #logger.error(traceback.print_exc());
+            self.logger.error(traceback.print_exc());
             plc_isRunning = False;
             
         except Exception as ex:
             traceback.print_exc();
             sys.stderr.write(str(traceback.print_exc()));
-            #logger.error(traceback.print_exc());
+            self.logger.error(traceback.print_exc());
             plc_isRunning = False;
             
         finally:
             client.disconnect(); 
             return(plc_hh_table, plc_isRunning);
 
+    #---------------------------------------------------------------------------
+    # opcCollectorSendToPLC - zapis kompenzacni parametry do PLC HEIDENHAIN
+    #
+    # OPC Strom: TM-AI
+    #              +---Compensation
+    #                   +---CompX         
+    #                   +---CompY         
+    #                   +---CompZ         
+    #                   +---setCompX         
+    #                   +---setCompY         
+    #                   +---setCompZ         
+    #                   +---write_comp_val_TM_AI
+    # 
+    #---------------------------------------------------------------------------
+    def opcCollectorSendToPLC(self, df_plc):
+        
+        global plc_isRunning;
+        plc_isRunning = True;
+
+        #return plc_isRunning;  # pouze pro ladeni !!!!!
+
+        uri = self.prefix+self.host2+":"+self.port2;
+        plcData = self.PLCData;
+
+        
+        if not self.ping_(self.host2):
+            plc_isRunning = False;
+            return plc_isRunning;
+
+        if not self.ping_(self.host1):
+            plc_isRunning = False;
+            return plc_isRunning;
+        
+        client = Client(self.uri2);
+        try:        
+            client.connect();
+                
+            root = client.get_root_node();
+            # Nacti aktualni hodnoty kompenzace CompX, CompY, CompZ
+            # get: CompX                
+            node = client.get_node("ns=2;s=Machine data.CompX");
+            plcData.CompX = node.get_value();
+            
+            # get: CompY                
+            node = client.get_node("ns=2;s=Machine data.CompY");
+            plcData.CompY = node.get_value();
+            
+            # get: CompZ                
+            node = client.get_node("ns=2;s=Machine data.CompZ");
+            plcData.CompZ = node.get_value();
+            
+            # Zapis aktualni hodnoty kompenzace CompX, CompY, CompZ
+            plcData.setCompX = int(df_plc[df_plc.columns[1]][0]);
+            plcData.setCompY = int(df_plc[df_plc.columns[2]][0]);
+            plcData.setCompZ = int(df_plc[df_plc.columns[3]][0]);
+            
+            
+            node_x = client.get_node("ns=2;s=Machine data.setCompX");
+            node_x.set_value(ua.DataValue(ua.Variant(plcData.setCompX, ua.VariantType.Int32)));
+            
+            node_y = client.get_node("ns=2;s=Machine data.setCompY");
+            node_y.set_value(ua.DataValue(ua.Variant(plcData.setCompY, ua.VariantType.Int32)));
+            
+            node_z = client.get_node("ns=2;s=Machine data.setCompZ");
+            node_z.set_value(ua.DataValue(ua.Variant(plcData.setCompZ, ua.VariantType.Int32)));
+                                
+            # Aktualizuj hodnoty v PLC - ns=2;s=Machine data.write_comp_val_TM_AI
+            parent = client.get_node("ns=2;s=Machine data")
+            method = client.get_node("ns=2;s=Machine data.write_comp_val_TM_AI");
+            parent.call_method(method); 
+            
+            
+            
+            # Nacti aktualni hodnoty kompenzace CompX, CompY, CompZ
+            # get: CompX                
+            node = client.get_node("ns=2;s=Machine data.CompX");
+            plcData.CompX = node.get_value();
+            
+            # get: CompY                
+            node = client.get_node("ns=2;s=Machine data.CompY");
+            plcData.CompY = node.get_value();
+            
+            # get: CompZ                
+            node = client.get_node("ns=2;s=Machine data.CompZ");
+            plcData.CompZ = node.get_value();
+            return plc_isRunning;
+            
+        
+        except OSError as ex:
+            traceback.print_exc();
+            sys.stderr.write(str(traceback.print_exc()));
+            self.logger.error(traceback.print_exc());
+            plc_isRunning = False;
+            
+        except Exception as ex:
+            traceback.print_exc();
+            sys.stderr.write(str(traceback.print_exc()));
+            self.logger.error(traceback.print_exc());
+            plc_isRunning = False;
+        
+        finally:
+            client.disconnect();
+                
+    
+    #---------------------------------------------------------------------------
+    # prepJitter,  setJitter
+    # v pripade ze se v prubehu cteciho cykluz OPC zadna data nezmeni 
+    # je nutno jim pridat umele sum, ktery nezhorsi presnost ale umozni
+    # neuronove siti predikci. Sit se nedokaze vyrovnat s konstantnim
+    # prubehem datove sady.
+    #---------------------------------------------------------------------------
+    def prepJitter(self, df_size):
+        
+        jitter = np.random.normal(0, .0005, df_size);
+        for i in range(len(jitter)):
+            jitter[i] = self.myFloatFormat(jitter[i]);
+        return jitter;    
+        #return(pd.DataFrame(jitter, columns=["jitter"]));
 
     #---------------------------------------------------------------------------
-    # opcCollectorTemp - nacti PLC HEIDENHAIN
+    # prepJitter,  setJitter
     #---------------------------------------------------------------------------
-    def opcCollectorGetPredictData(self):
+    def setJitter(self, df, df_parms, jitter_=False):
         
-        sys.stderr.write("Nacitam 120 vzorku dat pro predict - v intervalu 1 [s]\n");
-        #logger.info("Nacitam 120 vzorku dat pro predict - v intervalu 1 [s]");
-        for i in range(120):
+        if not jitter_:
+            return(df);
+        
+        df_size = len(df);
+        
+        for col in df.head():
+            if  col in df_parms and ptypes.is_numeric_dtype(df[col]):
+                jitter = self.prepJitter(df_size);
+                df[col].apply(lambda x: np.asarray(x) + np.asarray(jitter));
+        return(df);
+    
+    
+
+    #---------------------------------------------------------------------------
+    # opcCollectorGetPredictData - nacti PLC HEIDENHAIN + PLC BR
+    # zapis nactena data do br_data - rozsireni treninkove mnoziny 
+    # o data z minulosti
+    #
+    # nacti self.batch vzorku v intervalu self.plc_interval sekund(y) a posli je
+    # k predikci
+    # self.plc_interval je nastaven na 0.5[s]
+    #---------------------------------------------------------------------------
+    def opcCollectorGetPredictData(self, df_parms):
+
+        global plc_isRunning;
+
+        if not self.ping_(self.host2):
+            plc_isRunning = False;
+            return(None);
+
+        if not self.ping_(self.host1):
+            plc_isRunning = False;
+            return(None);
+
+        # zapis dat z OPC pro rozsireni treninkove mnoziny        
+        current_date =  datetime.now().strftime("%Y-%m-%d");
+        path_to_df = "./br_data/tm-ai_"+current_date+".csv";
+        
+        
+        #sys.stderr.write("Nacitam "+str(self.batch)+" vzorku dat pro predict - v intervalu 1 [s]\n");
+        #self.logger.warning("Nacitam "+str(self.batch)+" vzorku dat pro predict - v intervalu 1 [s]");
+        
+        for i in range(self.batch):
             br_plc, plc_isRunning = self.opcCollectorBR_PLC();
             if not plc_isRunning:
                 return(None);
@@ -367,15 +550,78 @@ class OPCAgent():
             hh_plc = np.concatenate((hh_plc, br_plc)).T;
             cols = np.array(hh_plc[0]);
             data = list((hh_plc[2]));
+            
             if i == 0:
                 df_predict = pd.DataFrame(columns = cols);
+                
             df_predict.loc[len(df_predict)] = data;
-            time.sleep(1.0);
+            #sys.stderr.write("." + str(i) +"\r");
 
+            time.sleep(self.plc_interval);
+            
+        # add jitter 
+        df_predict = self.setJitter(df_predict, df_parms, True);    
+        # zapis pristi treninkova data
+        if exists(path_to_df):
+            sys.stderr.write("\nNacteno "+str(self.batch)+" vzorku dat pro predict, pripisuji k:"+path_to_df+ "\n");
+            df_predict.to_csv(path_to_df, sep=";", float_format="%.6f", encoding="utf-8", mode="a", index=False, header=False);
+        else:    
+            sys.stderr.write("\nNacteno "+str(self.batch)+" vzorku dat pro predict, zapisuji do:"+path_to_df+ "\n");
+            df_predict.to_csv(path_to_df, sep=";", float_format="%.6f", encoding="utf-8", mode="w", index=False, header=True);
+            
         return(df_predict);
+    
+    #---------------------------------------------------------------------------
+    # opcCollectorGetDebugData - totez co opcCollectorGetPredictData ovsem
+    # data se nectou z OPC ale  z CSV souboru. Toto slouzi jen pro ladeni
+    # aby neby zavisle na aktivite OPC serveruuuuu.
+    # v pripade ladeni se nezapisuji treninkova data....
+    #---------------------------------------------------------------------------
+    def opcCollectorGetDebugData(self, df_parms):
+
+        global df_debug_count;
+        global df_debug_header;
+        df_predict = pd.DataFrame();
+        current_date =  datetime.now().strftime("%Y-%m-%d");
+        csv_file = "./br_data/predict-debug.csv";
+        
+        try:
+            df_predict         = pd.read_csv(csv_file,
+                                             sep=",|;", 
+                                             engine='python',  
+                                             header=0, 
+                                             encoding="utf-8",
+                                             skiprows=df_debug_count,
+                                             nrows=self.batch
+                                        );
+        except  EmptyDataError as ex:
+            return None;
+                                       
+        
+        df_len = int(len(df_predict));
+        if df_len <= 0:
+            return None;
+
+        if df_debug_count == 0:
+            df_debug_header = df_predict.columns.tolist();
+        else:
+            df_predict.columns = df_debug_header;    
+                
+        df_debug_count += self.batch;
+        
+        # add jitter
+        df_predict = self.setJitter(df_predict, df_parms, False);
+        df_predict.to_csv("./result/temp"+current_date+".csv");
+        time.sleep(1);
+            
+        return(df_predict);
+
 
 #---------------------------------------------------------------------------
 # DataFactory
+# 1. Nacti treninkova data z historie
+# 2. Nacti predikcni data z PLC
+# 3. Zapis vysledky
 #---------------------------------------------------------------------------
 class DataFactory():
 
@@ -408,7 +654,7 @@ class DataFactory():
     class DataResultDim:
           DataResultX: object;
 
-    def __init__(self, path_to_result, window):
+    def __init__(self, path_to_result, window, logger, debug_mode, batch, current_date):
         
     #Vystupni list parametru - co budeme chtit po siti predikovat
         self.df_parmx = ['temp_S1','temp_pr01',
@@ -439,13 +685,34 @@ class DataFactory():
                          'temp_vr07'];
         
         self.path_to_result = path_to_result;
+        self.window         = window;
+        self.df_multiplier  = 1;   
+        self.train          = pd.DataFrame();
+        self.valid          = pd.DataFrame();
+        self.predict        = pd.DataFrame();
+        self.logger         = logger;
+        self.debug_mode     = debug_mode;
+        self.batch          = batch;
+        self.current_date   = current_date;
+        
+        
+        self.parms  = [];
+        self.header =["typ", 
+                      "model", 
+                      "epochs", 
+                      "units", 
+                      "batch", 
+                      "actf", 
+                      "shuffling", 
+                      "txdat1", 
+                      "txdat2",
+                      "curr_txdat"]; 
+
+
+        #parametry z parm file - nacte parametry z ./parms/parms.txt
         self.getParmsFromFile();
-        self.window = window;
-        self.df_multiplier = 1;
-        self.train = pd.DataFrame();
-        self.valid = pd.DataFrame();
-        self.predict = pd.DataFrame();
-        self.opc = OPCAgent();
+        # new OPCAgent()
+        self.opc = OPCAgent(logger=self.logger, batch=self.batch);
 
     #---------------------------------------------------------------------------
     # isPing         
@@ -453,102 +720,17 @@ class DataFactory():
     def isPing(self):
         return(self.opc.isPing());
     #---------------------------------------------------------------------------
-    # myformat         
+    # myFloatFormat         
     #---------------------------------------------------------------------------
-    def myformat(self,x):
+    def myFloatFormat(self,x):
         return ('%.6f' % x).rstrip('0').rstrip('.');
 
     #---------------------------------------------------------------------------
-    # butterworth Filter         
+    # myIntFormat         
     #---------------------------------------------------------------------------
+    def myIntFormat(self, x):
+        return ('%.f' % x).rstrip('.');
 
-    def buttFilter(self, cutoff, fs, order=5):
-        nyq = 0.5 * fs
-        normal_cutoff = cutoff / nyq
-        b, a = butter(order, normal_cutoff, btype='low', analog=False)
-        return b, a
-
-    #---------------------------------------------------------------------------
-    # butterworth Filter         
-    #---------------------------------------------------------------------------
-    def buttLowpassFilter(self, data, cutoff, fs, order=5):
-        b, a = self.buttFilter(cutoff, fs, order=order)
-        y = lfilter(b, a, data)
-        return y
-
-
-    #---------------------------------------------------------------------------
-    # butterworth Filter         
-    #---------------------------------------------------------------------------
-    def lowpassFilter(self, df, parmx):
-        
-        order = 6
-        fs = 70.0       
-        cutoff = 3.667
-        
-        cols = df.columns;
-        for col in cols:
-            if col in parmx:
-                df[col] = self.buttLowpassFilter(df[col], cutoff, fs, order);
-        
-        return (df);
-        
-
-    #---------------------------------------------------------------------------
-    # multDF
-    #---------------------------------------------------------------------------
-    def multDF(self, df):
-
-        if self.df_multiplier == 1:
-            return df;
-
-        df = df.assign(Index=range(len(df))).set_index('Index')
-
-        df_mult = pd.DataFrame();
-        
-        rows_list = [];
-        for ind in df.index:
-            for i in range(self.df_multiplier):
-                rows_list.append(df.iloc[ind]);
-        
-        df_mult = pd.DataFrame(rows_list);
-        return df_mult;
-
-    #---------------------------------------------------------------------------
-    # divDF
-    #---------------------------------------------------------------------------
-    def divDF(self, df):
-
-        if self.df_multiplier == 1:
-            return df;
-
-
-        #index datetime 
-        df['Index'] = df["datetime"];
-        df.set_index('Index', inplace=True);
-
-        #mean ve sloupcich "predict"        
-        for col in df.columns:
-            if "predict" in col:
-                df[col] = df[col].groupby(['Index']).mean();
-        
-        df.reset_index(drop=True);
-        #index integer        
-        df = df.assign(Index=range(len(df))).set_index('Index')
-        df_div = pd.DataFrame();
-        
-        rows_list = [];
-        i = 0;
-        for ind in df.index:
-                if i < self.df_multiplier:
-                    i += 1;
-                    
-                    if i == self.df_multiplier:
-                        rows_list.append(df.iloc[ind]);
-                        i = 0;
-        
-        df_div = pd.DataFrame(rows_list);
-        return df_div;
     
     #---------------------------------------------------------------------------
     # setDataX(self, df,  size_train, size_valid, size_test)
@@ -556,7 +738,7 @@ class DataFactory():
     def setDataX(self, df, df_test,  size_train, size_valid, size_test, txdt_b=False, shuffling=False):
         #OSA XYZ
         try:
-
+            
             DataTrain_x = self.DataTrain;
             DataTrain_x.train = pd.DataFrame(df[0 : size_train][self.df_parmX]);
             DataTrain_x.valid = pd.DataFrame(df[size_train+1 : size_train + size_valid][self.df_parmX]);
@@ -565,7 +747,7 @@ class DataFactory():
                 DataTrain_x.train = DataTrain_x.train.reset_index(drop=True)
                 DataTrain_x.train = shuffle(DataTrain_x.train)
                 DataTrain_x.train = DataTrain_x.train.reset_index(drop=True)
-                #logger.info("--shuffle = True");
+                #self.logger.info("--shuffle = True");
             
             DataTrain_x.test  = df_test;
             DataTrain_x.df_parm_x = self.df_parmx;  # data na ose x, pro rovinu X
@@ -580,13 +762,40 @@ class DataFactory():
     
         except Exception as ex:
             traceback.print_exc();
-            #logger.error(traceback.print_exc());
+            self.logger.error(traceback.print_exc());
             sys.stderr.write(str(traceback.print_exc()));
+
+    #---------------------------------------------------------------------------
+    # interpolateDF
+    # interpoluje data splinem - vyhlazeni schodu na merenych artefaktech
+    #---------------------------------------------------------------------------
+    def interpolateDF(self, df, smoothing_factor, ip):
+
+        if not ip:
+            sys.stderr.write("interpolace artefaktu nebude provedena ip = False\n");
+            return df;
+        else:
+            sys.stderr.write("interpolace artefaktu, smoothing_factor:" + str(smoothing_factor)+"\n");
+        
+        col_names = list(self.df_parmX);
+        x = np.arange(0,len(df));
+
+        for i in range(len(col_names)):
+            if "dev" in col_names[i]:
+                spl =  inter.UnivariateSpline(x, df[col_names[i]], s=smoothing_factor);
+                df[col_names[i]] = spl(x);
+
+        return df;
+
     
     #---------------------------------------------------------------------------
     # getData
     #---------------------------------------------------------------------------
-    def getData(self, shuffling=False, timestamp_start='2022-06-29 05:00:00', timestamp_stop='2022-07-01 23:59:59', type="predict"):
+    def getData(self,
+                shuffling       = False,
+                timestamp_start = "2022-01-01 00:00:01", 
+                timestamp_stop  = "2042-12-31 23:59:59", 
+                type            = "predict"):
         
         txdt_b  = False;
         df      = pd.DataFrame();
@@ -604,18 +813,29 @@ class DataFactory():
             
             # sort souboru pro join
             joined_list.sort(key=None, reverse=False);
-            
+
+            usecols = ["datetime"];
+            for col in self.df_parmX:
+                usecols.append(col);
+
             df = pd.concat([pd.read_csv(csv_file,
                                          sep=",|;", 
                                          engine='python',  
-                                         header=0, encoding="utf-8",
+                                         header=0, 
+                                         encoding="utf-8",
+                                         usecols = usecols 
                                        )
                                     for csv_file in joined_list],
                                     axis=0, 
                                     ignore_index=True
                     );
+              # Odfiltruj data kdy stroj byl vypnut
+            df = df[(df["dev_x4"] != 0) & (df["dev_y4"] != 0) & (df["dev_z4"] != 0)];
             # bordel pri domluve nazvoslovi...            
             df.columns = df.columns.str.lower();
+            # interpoluj celou mnozinu data  
+            df = self.interpolateDF(df, 0.01, False);            
+            
             # vyber dat dle timestampu
             df["timestamp"] = pd.to_datetime(df["datetime"].str.slice(0, 18));
                 
@@ -624,38 +844,40 @@ class DataFactory():
             
             if len(df) <= 1:
                 sys.stderr.write("Data pro trenink maji nulovou velikost - exit(0)\n");
-                #logger.info("Data pro trenink maji nulovou velikost - exit(0)");
-                sys.exit(0);
+                self.logger.error("Data pro trenink maji nulovou velikost - exit(0)");
+                os._exit(0);
                 
             
             df["index"] = pd.Index(range(0, len(df), 1));
             df.set_index("index", inplace=True);
 
-            size = len(df.index)
-            size_train = math.floor(size * 8 / 12)
-            size_valid = math.floor(size * 4 / 12)
-            size_test  = math.floor(size * 0 / 12)
+            size = len(df);
+            size_train = math.floor(size * 8 / 12);
+            size_valid = math.floor(size * 4 / 12);
+            size_test  = math.floor(size * 0 / 12);
 
-            # type == 'predict' 
-            # predikcni mnozina - pokus zvetsi testovaci mnozinu self.df_multiplier krat...
-            df_test = self.opc.opcCollectorGetPredictData();
+            if self.debug_mode:
+                # nacti data z predict-debug.csv                        
+                df_test = self.opc.opcCollectorGetDebugData(self.df_parmX);
+            else:
+                # nacti data z OPC.
+                df_test = self.opc.opcCollectorGetPredictData(self.df_parmX);
+                
             
             if df_test is None:
-                sys.stderr.write("Patrne nebezi nektery OPC server\n");
-                #logger.info("Patrne nebezi nektery OPC server");
-                #pro ladeni
-                '''
-                sys.stderr.write("Jsou nactena ladici data !!!\n");
-                df_test = pd.read_csv("./br_data/predict.csv",
-                                         sep=",", 
-                                         engine='python',  
-                                         header=0, encoding="utf-8",
-                                       );
-                '''                       
-            if  not df_test is None and self.window >= len(df_test):
+                sys.stderr.write("Nebyla nactena zadna data pro predikci exit(1)\n");
+                self.logger.error("Nebyla nactena zadna data pro predikci exit(1)");
+                os._exit(1);
+                
+            if len(df_test) == 0:
+                sys.stderr.write("Patrne nebezi nektery OPC server  - exit(1)\n");
+                self.logger.error("Patrne nebezi nektery OPC server - exit(1)");
+                os._exit(1);
+                       
+            if  len(df_test) > 0 and self.window >= len(df_test):
                 sys.stderr.write("Prilis maly vzorek dat pro predikci - exit(1)\n");
-                #logger.info("Prilis maly vzorek dat pro predikci - exit(1)");
-                sys.exit(1);
+                self.logger.error("Prilis maly vzorek dat pro predikci - exit(1)");
+                os._exit(1);
                     
             if self.df_parmx == None or self.df_parmX == None:
                 pass;
@@ -675,24 +897,89 @@ class DataFactory():
         except Exception as ex:
             traceback.print_exc();
             sys.stderr.write(str(traceback.print_exc()));
-            #logger.error(traceback.print_exc());
+            self.logger.error(traceback.print_exc());
             
     #-----------------------------------------------------------------------
+    # saveDataToPLC  - result
+    # index = pd.RangeIndex(start=10, stop=30, step=2, name="data")
+    #-----------------------------------------------------------------------
+    def saveDataToPLC(self, timestamp_start, model, typ, saveresult=True):
+
+        col_names_y = list(self.DataTrain.df_parm_y);
+        filename = "./result/plc_archiv/plc_"+model+"_"+str(self.current_date)[0:10]+".csv";
+        
+        #curent timestamp UTC
+        current_time = time.time();
+        utc_timestamp = datetime.utcfromtimestamp(current_time);
+
+        l_plc = [];        
+        l_plc_col = [];        
+        
+        l_plc.append( str(utc_timestamp)[0:19]);
+        l_plc_col.append("utc");
+        
+        df_result = pd.DataFrame(self.DataResultDim.DataResultX.y_result, columns = col_names_y);
+
+        for col in col_names_y:
+            if "dev" in col:
+                mmean = self.myIntFormat(df_result[col].mean() *10000);   #prevod pro PLC (viz dokument Teplotni Kompenzace AI)
+                l_plc.append(mmean);                                      #  10 = 0.001 atd...
+                l_plc_col.append(col+"mean");
+                
+        df_plc = pd.DataFrame([l_plc], columns=[l_plc_col]);
+        
+                                      
+        path = Path(filename);
+        
+        if path.is_file():
+            append = True;
+        else:
+            append = False;
+        
+        if append:             
+            sys.stderr.write(f'Soubor {filename} existuje - append\n');
+            df_plc.to_csv(filename, mode = "a", index=False, header=False, float_format='%.5f');
+        else:
+            sys.stderr.write(f'Soubor {filename} neexistuje - create\n');
+            df_plc.to_csv(filename, mode = "w", index=False, header=True, float_format='%.5f');
+
+        # data do PLC
+        result_opc = self.opc.opcCollectorSendToPLC(df_plc=df_plc );
+        if result_opc:
+            sys.stderr.write("Data do PLC byla zapsana\n");
+            self.logger.warning("Data do PLC byla zapsana");
+        else:    
+            sys.stderr.write("Data do PLC nebyla zapsana !!!!!!\n");
+            self.logger.error("Data do PLC nebyla zapsana !!!!!!");
+        
+            
+
+        # data ke zkoumani zapisujeme v pripade behu typu "train" a zaroven v debug modu
+        if "train" in typ and self.debug_mode is True:
+            saveresult=True;
+        else:
+            saveresult=True;
+            
+        if saveresult:
+            sys.stderr.write("Vystupni soubor " + filename + " vznikne.\n");
+            self.saveDataResult(timestamp_start, model, typ, saveresult);
+            return;
+        else:
+            sys.stderr.write("Vystupni soubor " + filename + " nevznikne !!!, saveresult = " +str(saveresult) +"\n");
+            return;
+        
+        return;    
+        
+        
+        
+        
+    #-----------------------------------------------------------------------
     # saveDataResult  - result
+    # index = pd.RangeIndex(start=10, stop=30, step=2, name="data")
     #-----------------------------------------------------------------------
     def saveDataResult(self, timestamp_start, model, typ, saveresult=True):
         
         filename = "./result/predicted_"+model+".csv"
-        
-        if "train" in typ:
-            saveresult=True;
-            
-        
-        if not saveresult:
-            sys.stderr.write("Vystupni soubor " + filename + " nevznikne !!!, saveresult = " +str(saveresult)+"\n");
-            return;
-        else:
-            sys.stderr.write("Vystupni soubor " + filename + " vznikne.\n");
         
         try:
             col_names_y = list(self.DataTrain.df_parm_y);
@@ -719,17 +1006,15 @@ class DataFactory():
                     a = 0;
                 else:    
                     col_names_drop2.append(col);
-                    
             
         except Exception as ex:
             traceback.print_exc();
-            sys.stderr.write(str(traceback.print_exc()));
-            #logger.error(traceback.print_exc());
-
+            self.logger.error(traceback.print_exc());
             
         try:
             self.DataTrain.test.reset_index(drop=True, inplace=True)
             
+
             df_result = pd.DataFrame();
             df_result  = pd.DataFrame(self.DataResultDim.DataResultX.y_result, columns = col_names_y);
             df_result.drop(col_names_drop, inplace=True, axis=1);
@@ -737,41 +1022,109 @@ class DataFactory():
             
             df_result2 = pd.DataFrame();
             df_result2 = pd.DataFrame(self.DataTrain.test);
-            df_result2.drop(col_names_drop2, inplace=True, axis=1);
 
-            df_result  = pd.concat([df_result2, df_result], axis=1);
-            df_result["txdat_group"] = timestamp_start;
+            #merge - left inner join
+            df_result  = pd.concat([df_result.reset_index(drop=True),
+                                    df_result2.reset_index(drop=True)],
+                                    axis=1);
             
-            df_result = self.divDF(df_result);
             
+            # U gru se na posledni vete vyskytuje NaN
+            for col in col_names_dev:
+                col = col+"_predict";
+                df_result[col] = df_result[col].fillna(0);
+
             # Absolute Error
             for col in col_names_dev:
-                ae = (df_result[col] - df_result[col+"_predict"]);
+                ae = df_result[col].astype(float) - df_result[col+"_predict"].astype(float);
                 df_result[col+"_ae"] = ae;
             # Mean Squared Error
             for col in col_names_dev:
-                mse = mean_squared_error(df_result[col],df_result[col+"_predict"]);
+                mse = mean_squared_error(df_result[col].astype(float),df_result[col+"_predict"].astype(float));
                 df_result[col+"_mse"] = mse;
+                
+            list_cols     = list({"idx"}); 
+            list_cols_avg = list({"idx"}); 
             
-            path = Path(filename)
+            for col in col_names_dev:
+                if "dev" in col:
+                    list_cols.append(col+"_predict");
+                    list_cols_avg.append(col+"_predict_avg");
 
+            
+            # MAE avg cols
+            # MAE avg cols
+            for col in col_names_dev:
+                ae = (df_result[col].astype(float) - df_result[col+"_predict"].astype(float));
+                df_result[col+"_ae"] = ae;
+
+            path = Path(filename)
             if path.is_file():
                 append = True;
             else:
                 append = False;
         
             if append:             
-                sys.stderr.write(f"\nSoubor {filename} existuje - append: "+ str(len(df_result)) + " vet\n");
+                sys.stderr.write(f"Soubor {filename} existuje - append: " + str(len(df_result))+"\n");
                 df_result.to_csv(filename, mode = "a", index=True, header=False, float_format='%.5f');
             else:
-                sys.stderr.write(f"\nSoubor {filename} neexistuje - create: "+ str(len(df_result))+"\n");
+                sys.stderr.write(f"Soubor {filename} neexistuje - create: " + str(len(df_result))+"\n");
                 df_result.to_csv(filename, mode = "w", index=True, header=True, float_format='%.5f');
+                
+            self.saveParmsMAE(df_result, model)    
 
         except Exception as ex:
             traceback.print_exc();
-            #logger.error(traceback.print_exc());
-            sys.stderr.write(str(traceback.print_exc()));
-    
+            self.logger.error(traceback.print_exc());
+        
+        return;    
+
+    #-----------------------------------------------------------------------
+    # saveParmsMAE - zapise hodnoty MAE v zavislosti na pouzitych parametrech
+    #-----------------------------------------------------------------------
+    def saveParmsMAE(self, df,  model):
+
+        filename = "./result/parms_mae_"+model+".csv"
+        
+        #pridej maximalni hodnotu AE
+        for col in df.columns:
+            if "_ae" in col:
+                if "_avg" in col:
+                    self.header.append(col+"_max");
+                    res = self.myFloatFormat(df[col].abs().max())
+                    self.parms.append(float(res));        
+                else:
+                    self.header.append(col+"_max");
+                    res = self.myFloatFormat(df[col].abs().max())
+                    self.parms.append(float(res));        
+        
+        #pridej mean AE
+        for col in df.columns:
+            if "_ae" in col:
+                if "_avg" in col:
+                    self.header.append(col+"_avg");
+                    res = self.myFloatFormat(df[col].abs().mean())
+                    self.parms.append(float(res));        
+                else:
+                    self.header.append(col+"_avg");
+                    res = self.myFloatFormat(df[col].abs().mean())
+                    self.parms.append(float(res));
+        
+        df_ae = pd.DataFrame(data=[self.parms], columns=self.header);
+        
+        path = Path(filename)
+        if path.is_file():
+            append = True;
+        else:
+            append = False;
+        
+        if append:             
+            sys.stderr.write(f'Soubor {filename} existuje - append\n');
+            df_ae.to_csv(filename, mode = "a", index=True, header=False, float_format='%.5f');
+        else:
+            sys.stderr.write(f'Soubor {filename} neexistuje - create\n');
+            df_ae.to_csv(filename, mode = "w", index=True, header=True, float_format='%.5f');
+            
         return;    
         
     #-----------------------------------------------------------------------
@@ -807,13 +1160,13 @@ class DataFactory():
                 
             file.close();
             sys.stderr.write("parametry nacteny z "+ parmfile +"\n");       
-            #logger.info("parametry nacteny z "+ parmfile);                 
+            self.logger.info("parametry nacteny z "+ parmfile);                 
             
                 
         except:
             sys.stderr.write("Soubor parametru "+ parmfile + " nenalezen!\n");                
             sys.stderr.write("Parametry pro trenink site budou nastaveny implicitne v programu\n");                 
-            #logger.info("Soubor parametru " + parmfile + " nenalezen!");
+            self.logger.info("Soubor parametru " + parmfile + " nenalezen!");
         
         return();  
     
@@ -827,6 +1180,71 @@ class DataFactory():
             df_parmX_predict[i] = self.df_parmX[i]+"_predict";
         i = 0;
              
+    #-----------------------------------------------------------------------
+    # toTensorLSTM(self, dataset, window = 64):
+    #-----------------------------------------------------------------------
+    # Pracujeme - li s rekurentnimi sitemi (LSTM GRU...), pak 
+    # musíme vygenerovat dataset ve specifickém formátu.
+    # Vystupem je 3D tenzor ve forme 'window' casovych kroku.
+    #  
+    # Jakmile jsou data vytvořena ve formě 'window' časových kroků, 
+    # jsou nasledne prevedena do pole NumPy a reshapovana na 
+    # pole 3D X_dataset.
+    #
+    # Funkce take vyrobi pole y_dataset, ktere muze byt pouzito pro 
+    # simulaci modelu vstupnich dat, pokud tato data nejsou k dispozici.  
+    # y_dataset predstavuje "window" časových rámců krat prvni prvek casoveho 
+    # ramce pole X_dataset
+    #
+    # funkce vraci: X_dataset - 3D tenzor dat pro uceni site
+    #               y_dataset - vektor vstupnich dat (model)
+    #               dataset_cols - pocet sloupcu v datove sade. 
+    #
+    # poznamka: na konec tenzoru se pripoji libovolne 'okno' aby se velikost
+    #           o toto okno zvetsila - vyresi se tim chybejici okno pri predikci
+    #           
+    #-----------------------------------------------------------------------
+    
+    def toTensorLSTM(dataset, window):
+        
+        X_dataset = []  #data pro tf.fit(x - data pro uceni
+        y_dataset = []  #data pro tf.fit(y - vstupni data 
+                            #jen v pripade ze vst. data nejsou definovana
+                        
+        values = dataset[0 : window, ];
+        dataset = np.append(dataset, values, axis=0) #pridej delku okna
+        dataset_rows, dataset_cols = dataset.shape;
+
+        
+        if window >= dataset_rows:
+            sys.stderr.write("prilis maly  vektor dat k uceni!!! parametr window je vetsi nez delka vst. vektoru \n");
+            self.logger.error("prilis maly  vektor dat k uceni!!! parametr window je vetsi nez delka vst. vektoru");
+        
+        for i in range(window, dataset_rows):
+            X_dataset.append(dataset[i - window : i, ]);
+            y_dataset.append(dataset[i, ]);
+        
+        #doplnek pro append chybejicich window vzorku pri predikci
+        X_dataset.append(dataset[0 : window, ]);
+            
+        X_dataset = np.array(X_dataset);
+        y_dataset = np.array(y_dataset);
+        
+        X_dataset = np.reshape(X_dataset, (X_dataset.shape[0], X_dataset.shape[1], dataset_cols));
+        
+        return NeuronLayerLSTM.DataSet(X_dataset, y_dataset, dataset_cols);
+
+    #-----------------------------------------------------------------------
+    # fromTensorLSTM(self, dataset, window = 64):
+    #-----------------------------------------------------------------------
+    # Poskladej vysledek vzdy z posledniho behu treninkove sady
+    # a vrat vysledek o rozmeru [0: (dataset.shape[0] - 1)] krat [0 : dataset.shape[2]]
+    # priklad: ma li tenzor rozmer 100 x 64 x 16, pak vrat vysledek [0:100-1], 64, [0,16-1]
+    # funkce vraci: y_result - 2D array vysledku predikce
+    #-----------------------------------------------------------------------
+    def fromTensorLSTM(dataset):
+        return(dataset[0 : (dataset.shape[0]),  (dataset.shape[1] - 1) , 0 : dataset.shape[2]]);
+        
 
 
     #---------------------------------------------------------------------------
@@ -846,6 +1264,20 @@ class DataFactory():
     
     def getDfPredictData(self):
         return (self.predict);
+    
+    def setParms(self, parms):
+        self.parms = parms;
+    
+    def getParms(self):
+        return self.parms;
+    
+    def setHeader(self, header):
+        self.header = header;
+    
+    def getHeader(self):
+        return self.header;
+
+    
 
 #---------------------------------------------------------------------------
 # Neuronova Vrstava DENSE
@@ -855,28 +1287,50 @@ class NeuronLayerDENSE():
     
     @dataclass
     class DataSet:
-        X_dataset: object              #data k uceni
-        y_dataset: object              #vstupni data
-        cols:      int                 #pocet sloupcu v datove sade
+        X_dataset: object;             #data k uceni
+        y_dataset: object;             #vstupni data
+        cols:      int;                #pocet sloupcu v datove sade
 
-    def __init__(self, path_to_result, typ, model, epochs, batch, txdat1, txdat2, window, units=256, shuffling=True, actf="tanh"):
+    def __init__(self, 
+                 path_to_result, 
+                 typ, 
+                 model, 
+                 epochs, 
+                 batch, 
+                 txdat1, 
+                 txdat2, 
+                 window, 
+                 units, 
+                 shuffling, 
+                 actf, 
+                 logger,
+                 debug_mode,
+                 current_date=""
+            ):
         
         self.path_to_result = path_to_result; 
-        self.typ = typ;
-        self.model = model;
+        self.typ    = typ;
+        self.model_ = model;
         self.epochs = epochs;
-        self.batch = batch;
-        self.txdat1=txdat1;
-        self.txdat2=txdat2;
-        
-        self.df = pd.DataFrame();
+        self.batch  = batch;
+        self.txdat1 = txdat1;
+        self.txdat2 = txdat2;
+        self.logger = logger;
+        self.debug_mode = debug_mode;
+        self.current_date=current_date;
+
+        self.df     = pd.DataFrame();
         self.df_out = pd.DataFrame();
-        self.graph = None;
+        self.graph  = None;
         self.window = window;
-        self.units = units;
+        self.units  = units;
         self.shuffling = shuffling;
-        self.actf = actf;
-        self.data = DataFactory(path_to_result=self.path_to_result, window=self.window);
+        self.actf   = actf;
+        self.data           = None;
+        self.x_train_scaler = None;
+        self.y_train_scaler = None;
+        self.x_valid_scaler = None;
+        self.y_valid_scaler = None;
 
     #---------------------------------------------------------------------------
     # isPing ????
@@ -905,7 +1359,7 @@ class NeuronLayerDENSE():
     def neuralNetworkDENSEtrain(self, DataTrain):
 
         try:
-            
+         
             y_train_data = np.array(DataTrain.train[DataTrain.df_parm_y]);
             x_train_data = np.array(DataTrain.train[DataTrain.df_parm_x]);
             y_valid_data = np.array(DataTrain.valid[DataTrain.df_parm_y]);
@@ -915,42 +1369,46 @@ class NeuronLayerDENSE():
             out_size = len(y_train_data[0])
             
         # normalizace dat k uceni a vstupnich treninkovych dat 
-            x_train = MinMaxScaler(feature_range=(0, 1))
-            x_train = x_train.fit_transform(x_train_data)
-            y_train = MinMaxScaler(feature_range=(0, 1))
-            y_train = y_train.fit_transform(y_train_data)
-        
-        # normalizace dat k uceni a vstupnich validacnich dat 
-            x_valid = MinMaxScaler(feature_range=(0, 1))
-            x_valid = x_valid.fit_transform(x_valid_data)
-            y_valid = MinMaxScaler(feature_range=(0, 1))
-            y_valid = y_valid.fit_transform(y_valid_data)
-
+            self.x_train_scaler = MinMaxScaler(feature_range=(0, 1))
+            x_train_data = self.x_train_scaler.fit_transform(x_train_data)
+            pickle.dump(self.x_train_scaler, open("./temp/x_train_scaler.pkl", 'wb'))
+            
+            self.y_train_scaler = MinMaxScaler(feature_range=(0, 1))
+            y_train_data = self.y_train_scaler.fit_transform(y_train_data)
+            pickle.dump(self.y_train_scaler, open("./temp/y_train_scaler.pkl", 'wb'))
+            
+        # normalizace dat k uceni a vstupnich treninkovych dat 
+            self.x_valid_scaler = MinMaxScaler(feature_range=(0, 1))
+            x_valid_data = self.x_valid_scaler.fit_transform(x_valid_data)
+            pickle.dump(self.x_train_scaler, open("./temp/x_valid_scaler.pkl", 'wb'))
+            
+            self.y_valid_scaler = MinMaxScaler(feature_range=(0, 1))
+            y_valid_data = self.y_valid_scaler.fit_transform(y_valid_data)
+            pickle.dump(self.y_train_scaler, open("./temp/y_valid_scaler.pkl", 'wb'))
+            
             
         # neuronova sit
             model = Sequential();
+            initializer = tf.keras.initializers.RandomUniform(minval=-0.05, maxval=0.05, seed=None)
             model.add(tf.keras.Input(shape=(inp_size,)));
-            model.add(layers.Dense(units=inp_size,   activation=self.actf, kernel_initializer='he_normal'));
-            model.add(layers.Dense(units=self.units, activation=self.actf, kernel_initializer='he_normal'));
-            model.add(layers.Dense(units=self.units, activation=self.actf, kernel_initializer='he_normal'));
-            model.add(layers.Dense(units=self.units, activation=self.actf, kernel_initializer='he_normal'));
-#            model.add(layers.Dense(units=self.units, activation=self.actf, kernel_initializer='he_normal'));
-#            model.add(layers.Dense(units=self.units, activation=self.actf, kernel_initializer='he_normal'));
+            model.add(layers.Dense(units=inp_size,       activation=self.actf, kernel_initializer=initializer));
+            model.add(layers.Dense(units=self.units,     activation=self.actf, kernel_initializer=initializer));
+            model.add(layers.Dense(units=self.units,     activation=self.actf, kernel_initializer=initializer));
             model.add(layers.Dense(out_size));
             
         # definice ztratove funkce a optimalizacniho algoritmu
             model.compile(loss='mse', optimizer='adam', metrics=['mse', 'acc'])
             
         # natrenuj model na vstupni dataset
-            history = model.fit(x_train, 
-                            y_train, 
-                            epochs=self.epochs, 
-                            batch_size=self.batch, 
-                            verbose=2, 
-                            validation_data=(x_valid, y_valid)
+            history = model.fit(x_train_data, 
+                                y_train_data, 
+                                epochs=self.epochs, 
+                                batch_size=self.batch, 
+                                verbose=2, 
+                                validation_data=(x_valid_data, y_valid_data)
                             )
         
-            model.save('./models/model_'+self.model+'_'+ DataTrain.axis, overwrite=True, include_optimizer=True)
+            model.save('./models/model_'+self.model_+'_'+ DataTrain.axis, overwrite=True, include_optimizer=True)
         
         # make predictions for the input data
             return (model);
@@ -959,83 +1417,94 @@ class NeuronLayerDENSE():
         except Exception as ex:
             traceback.print_exc();
             sys.stderr.write(str(traceback.print_exc()));
-            #logger.error(traceback.print_exc());
+            self.logger.error(traceback.print_exc());
         
     #---------------------------------------------------------------------------
-    # Neuronova Vrstava DENSE predict 
+    # Neuronova Vrstava DENSE predict
+    # Zapis scaler 
+    #   df = pd.DataFrame({'A':[1,2,3,7,9,15,16,1,5,6,2,4,8,9],
+    #                      'B':[15,12,10,11,8,14,17,20,4,12,4,5,17,19],
+    #                      'C':['Y','Y','Y','Y','N','N','N','Y','N','Y','N','N','Y','Y']})
+    #   df[['A','B']] = min_max_scaler.fit_transform(df[['A','B']])  
+    #   pickle.dump(min_max_scaler, open("scaler.pkl", 'wb'))
+    # Nacti scaler
+    #   scalerObj = pickle.load(open("scaler.pkl", 'rb'))
+    #   df_test = pd.DataFrame({'A':[25,67,24,76,23],'B':[2,54,22,75,19]})
+    #   df_test[['A','B']] = scalerObj.transform(df_test[['A','B']])
+    #
+    #
     #---------------------------------------------------------------------------
     def neuralNetworkDENSEpredict(self, model, DataTrain):
         
         try:
-            axis     = DataTrain.axis;  
+            axis     = DataTrain.axis;
             x_test   = np.array(DataTrain.test[DataTrain.df_parm_x]);
             y_test   = np.array(DataTrain.test[DataTrain.df_parm_y]);
-            
         # normalizace vstupnich a vystupnich testovacich dat 
-            x_test_scale  = MinMaxScaler(feature_range=(0, 1));
-            x_test        = x_test_scale.fit_transform(x_test);
-            y_test_scale  = MinMaxScaler(feature_range=(0, 1));
-            y_test        = y_test_scale.fit_transform(y_test);
-        
-        # predict
+            x_test        =  self.x_train_scaler.transform(x_test);
+        # predikce site
             y_result = model.predict(x_test);
-        
-            x_test   = x_test_scale.inverse_transform(x_test);
-            y_test   = y_test_scale.inverse_transform(y_test)
-
-        #y_result_scale = MinMaxScaler();
-            y_result = y_test_scale.inverse_transform(y_result);
+        # zapis syrove predikce ke zkoumani    
+            y_result  = self.y_train_scaler.inverse_transform(y_result);
             
-        # plot grafu compare...
-            model.summary()
+            columns=DataTrain.df_parm_y
+            dfy= pd.DataFrame();
+            dfy  = pd.DataFrame(y_result, columns=columns);
+
+
+            if self.debug_mode:  # zapis syrova data do raw.csv
+                model.summary();
+                if exists("./result/raw.csv"):
+                    dfy.to_csv("./result/raw.csv",  encoding="utf-8", mode="a", index=False, header=False);
+                else:    
+                    dfy.to_csv("./result/raw.csv",  encoding="utf-8", mode="w", index=False, header=True);
 
             return DataFactory.DataResult(x_test, y_test, y_result, axis)
 
         except Exception as ex:
             sys.stderr.write("POZOR !!! patrne se neshoduji predkladana data s natrenovanym modelem\n");
             sys.stderr.write("          zkuste nejdrive --typ == train !!!\n");
-            traceback.print_exc();
             sys.stderr.write(str(traceback.print_exc()));
-            #logger.error(traceback.print_exc());
+            self.logger.error(traceback.print_exc());
 
     #---------------------------------------------------------------------------
     # neuralNetworkDENSEexec_x 
     #---------------------------------------------------------------------------
     def neuralNetworkDENSEexec_x(self, data, graph):
 
-        
         try:
             startTime = datetime.now();
             model_x = ''
             if self.typ == 'train':
                 sys.stderr.write("Start vcetne treninku, model bude zapsan\n");
-                #logger.info("Start vcetne treninku, model bude zapsan");
+                self.logger.warning("Start vcetne treninku, model bude zapsan");
                 model_x = self.neuralNetworkDENSEtrain(data.DataTrainDim.DataTrain);
             else:    
                 sys.stderr.write("Start bez treninku - model bude nacten\n");
-                #logger.info("Start bez treninku - model bude nacten");
-                model_x = load_model('./models/model_'+self.model+'_'+ data.DataTrainDim.DataTrain.axis);
+                self.logger.warning("Start bez treninku - model bude nacten");
+                model_x = load_model('./models/model_'+self.model_+'_'+ data.DataTrainDim.DataTrain.axis);
             
-            if data.DataTrainDim.DataTrain.test is None:
+            if  data.DataTrainDim.DataTrain.test is None or len(data.DataTrainDim.DataTrain.test) == 0:
                 sys.stderr.write("Data pro predikci nejsou k dispozici....\n");
-                #logger.info("Data pro predikci nejsou k dispozici....");
+                self.logger.error("Data pro predikci nejsou k dispozici....");
                 return();
+           
             
             data.DataResultDim.DataResultX = self.neuralNetworkDENSEpredict(model_x, data.DataTrainDim.DataTrain);
-            data.saveDataResult(self.txdat1, self.model, self.typ);
+            data.saveDataToPLC(self.txdat1, self.model_, self.typ);
+                
             stopTime = datetime.now();
             sys.stderr.write("cas vypoctu[s] " + str(stopTime - startTime) + "\n");
-            #logger.info("cas vypoctu[s] %s",  str(stopTime - startTime));
+            self.logger.info("cas vypoctu[s] %s",  str(stopTime - startTime));
 
             return();
 
         except FileNotFoundError as e:
             sys.stderr.write(f"Nenalezen model site, zkuste nejdrive spustit s parametem train !!!\n");    
-            #logger.error(f"Nenalezen model, zkuste nejdrive spustit s parametem train !!!\n" f"{e}");
+            self.logger.error(f"Nenalezen model, zkuste nejdrive spustit s parametem train !!!\n" f"{e}");
         except Exception as ex:
             sys.stderr.write(str(traceback.print_exc()));
-            #logger.error(traceback.print_exc());
-            traceback.print_exc();
+            self.logger.error(traceback.print_exc());
             
     #------------------------------------------------------------------------
     # neuralNetworkDENSEexec
@@ -1044,10 +1513,27 @@ class NeuronLayerDENSE():
 
         try:
             sys.stderr.write("\nPocet GPU jader: "+ str(len(tf.config.experimental.list_physical_devices('GPU')))+"\n")
+            self.data = DataFactory(path_to_result=self.path_to_result, 
+                                    window=self.window,
+                                    logger=self.logger,
+                                    batch=self.batch,
+                                    debug_mode=self.debug_mode,
+                                    current_date=self.current_date);
         
-            if self.typ == 'predict':
-                self.shuffling = False;
                 
+            parms = [self.typ,
+                     self.model_,
+                     self.epochs,
+                     self.units,
+                     self.batch,
+                     self.actf,
+                     str(self.shuffling), 
+                     self.txdat1, 
+                     self.txdat2,
+                     str(self.current_date)];
+            
+            self.data.setParms(parms);
+            
             self.data.Data = self.data.getData(shuffling=self.shuffling, 
                                                timestamp_start=self.txdat1, 
                                                timestamp_stop=self.txdat2,
@@ -1055,9 +1541,9 @@ class NeuronLayerDENSE():
             
             if self.data.getDfTrainData().empty and "predict" in self.typ:
                 sys.stderr.write("Data pro predict, nejsou k dispozici\n");
+                self.logger.error("Data pro predict, nejsou k dispozici");
                 return(0);
-                
-                                                
+
     # Execute.....
             self.neuralNetworkDENSEexec_x(data=self.data, graph=self.graph);
             
@@ -1071,19 +1557,313 @@ class NeuronLayerDENSE():
         except Exception as ex:
             traceback.print_exc();
             sys.stderr.write(str(traceback.print_exc()));
-            #logger.error(traceback.print_exc());
+            self.logger.error(traceback.print_exc());
 
+    #---------------------------------------------------------------------------
+    # setter - getter
+    #---------------------------------------------------------------------------
+    # dense, lstm
+    def getModel(self):
+        return self.model_;
+    # predict, train
+    def getTyp(self):
+        return self.typ;
+     
+    def setTyp(self, typ):
+        self.typ = typ;
+
+
+#---------------------------------------------------------------------------
+# Neuronova Vrstava LSTM
+#---------------------------------------------------------------------------
+class NeuronLayerLSTM():
+    #definice datoveho ramce
+    
+
+    @dataclass
+    class DataSet:
+        X_dataset: object              #data k uceni
+        y_dataset: object              #vstupni data
+        cols:      int                 #pocet sloupcu v datove sade
+
+    def __init__(self, 
+                 path_to_result, 
+                 typ, 
+                 model, 
+                 epochs, 
+                 batch, 
+                 txdat1, 
+                 txdat2, 
+                 window, 
+                 units, 
+                 shuffling, 
+                 actf,
+                 logger,
+                 debug_mode,
+                 current_date):
+        
+        self.path_to_result = path_to_result; 
+        self.typ = typ;
+        self.model_ = model;
+        self.epochs = epochs;
+        self.batch = batch;
+        self.txdat1 = txdat1;
+        self.txdat2 = txdat2;
+        
+        self.df = pd.DataFrame()
+        self.df_out = pd.DataFrame()
+        self.graph = None;
+        self.data  = None;
+        self.window = window;
+        self.units  = units;
+        self.shuffling = shuffling;
+        self.actf = actf;
+        self.logger = logger;
+        self.debug_mode = debug_mode;
+        self.current_date=current_date,
+        self.data           = None;
+        self.x_train_scaler = None;
+        self.y_train_scaler = None;
+        self.x_valid_scaler = None;
+        self.y_valid_scaler = None;
+        
+
+    #---------------------------------------------------------------------------
+    # Neuronova Vrstava LSTM
+    #---------------------------------------------------------------------------
+    def neuralNetworkLSTMtrain(self, DataTrain):
+        window_X = self.window;
+        window_Y =  1;
+        
+        try:
+            y_train_data = np.array(DataTrain.train[DataTrain.df_parm_y]);
+            x_train_data = np.array(DataTrain.train[DataTrain.df_parm_x]);
+            y_valid_data = np.array(DataTrain.valid[DataTrain.df_parm_y]);
+            x_valid_data = np.array(DataTrain.valid[DataTrain.df_parm_x]);
+        
+            inp_size = len(x_train_data[0]);
+            out_size = len(y_train_data[0]);
+            
+        # normalizace dat k uceni a vstupnich treninkovych dat 
+            self.x_train_scaler = MinMaxScaler(feature_range=(0, 1))
+            x_train_data = self.x_train_scaler.fit_transform(x_train_data)
+            pickle.dump(self.x_train_scaler, open("./temp/x_train_scaler.pkl", 'wb'))
+            
+            self.y_train_scaler = MinMaxScaler(feature_range=(0, 1))
+            y_train_data = self.y_train_scaler.fit_transform(y_train_data)
+            pickle.dump(self.y_train_scaler, open("./temp/y_train_scaler.pkl", 'wb'))
+            
+        # normalizace dat k uceni a vstupnich treninkovych dat 
+            self.x_valid_scaler = MinMaxScaler(feature_range=(0, 1))
+            x_valid_data = self.x_valid_scaler.fit_transform(x_valid_data)
+            pickle.dump(self.x_train_scaler, open("./temp/x_valid_scaler.pkl", 'wb'))
+            
+            self.y_valid_scaler = MinMaxScaler(feature_range=(0, 1))
+            y_valid_data = self.y_valid_scaler.fit_transform(y_valid_data)
+            pickle.dump(self.y_train_scaler, open("./temp/y_valid_scaler.pkl", 'wb'))
+        
+        #data pro trenink -3D tenzor
+            X_train =  DataFactory.toTensorLSTM(x_train_data, window=window_X);
+        #vstupni data train 
+            Y_train = DataFactory.toTensorLSTM(y_train_data, window=window_Y);
+            Y_train.X_dataset = Y_train.X_dataset[0 : X_train.X_dataset.shape[0]];
+        #data pro validaci -3D tenzor
+            X_valid = DataFactory.toTensorLSTM(x_valid_data, window=window_X);
+        #vystupni data pro trenink -3D tenzor
+            Y_valid = DataFactory.toTensorLSTM(y_valid_data, window=window_Y);
+            Y_valid.X_dataset = Y_valid.X_dataset[0 : X_valid.X_dataset.shape[0]];
+            
+        # neuronova sit
+            model = Sequential();
+            model.add(Input(shape=(X_train.X_dataset.shape[1], X_train.cols,)));
+            model.add(LSTM(units = self.units, return_sequences=True));
+            model.add(Dropout(0.2));
+            model.add(LSTM(units = self.units, return_sequences=True));
+        #    model.add(Dropout(0.2));
+        #   model.add(LSTM(units = self.units, return_sequences=True));
+            model.add(layers.Dense(Y_train.cols, activation='relu'));
+
+        # definice ztratove funkce a optimalizacniho algoritmu
+            model.compile(loss='mse', optimizer='adam', metrics=['mse', 'acc']);
+        # natrenuj model na vstupni dataset
+            history = model.fit(X_train.X_dataset, 
+                                Y_train.X_dataset, 
+                                epochs=self.epochs, 
+                                batch_size=self.batch, 
+                                verbose=2, 
+                                validation_data=(X_valid.X_dataset,
+                                                 Y_valid.X_dataset)
+                            );
+
+            
+        # zapis modelu    
+            model.save('./models/model_'+self.model_+'_'+ DataTrain.axis, overwrite=True, include_optimizer=True)
+
+        # make predictions for the input data
+            return (model);
+        
+        except Exception as ex:
+            traceback.print_exc();
+            self.logger.error(traceback.print_exc());
+        
+        
+    #---------------------------------------------------------------------------
+    # Neuronova Vrstava LSTM predict 
+    #---------------------------------------------------------------------------
+
+    def neuralNetworkLSTMpredict(self, model, DataTrain):
+
+        try:
+            axis     = DataTrain.axis;  
+            x_test   = np.array(DataTrain.test[DataTrain.df_parm_x]);
+            y_test   = np.array(DataTrain.test[DataTrain.df_parm_y]);
+            
+            self.x_train_scaler =  pickle.load(open("./temp/x_train_scaler.pkl", 'rb'))
+            self.y_train_scaler =  pickle.load(open("./temp/y_train_scaler.pkl", 'rb'))
+            
+            x_test        = self.x_train_scaler.transform(x_test);
+            
+            x_object      = DataFactory.toTensorLSTM(x_test, window=self.window);
+            dataset_rows, dataset_cols = x_test.shape;
+        # predict
+            y_result      = model.predict(x_object.X_dataset);
+        
+        # reshape 3d na 2d  
+        # vezmi (y_result.shape[1] - 1) - posledni ramec vysledku - nejlepsi mse i mae
+            y_result      = y_result[0 : (y_result.shape[0] - 1),  (y_result.shape[1] - 1) , 0 : y_result.shape[2]];
+            y_result = self.y_train_scaler.inverse_transform(y_result);
+            
+        # plot grafu compare...
+            model.summary()
+
+            return DataFactory.DataResult(x_test, y_test, y_result, axis)
+
+        except Exception as ex:
+            sys.stderr.write("POZOR !!! patrne se neshoduji predkladana data s natrenovanym modelem\n");
+            sys.stderr.write("          zkuste nejdrive --typ == train !!!\n");
+            traceback.print_exc();
+            self.logger.error(traceback.print_exc());
+
+
+
+
+    #---------------------------------------------------------------------------
+    # neuralNetworkLSTMexec_x 
+    #---------------------------------------------------------------------------
+    def neuralNetworkLSTMexec_x(self, data, graph):
+        
+        try:
+            startTime = datetime.now();
+            model_x = ''
+            if self.typ == 'train':
+                sys.stderr.write("Start vcetne treninku, model bude zapsan\n");
+                self.logger.info("Start vcetne treninku, model bude zapsan");
+                model_x = self.neuralNetworkLSTMtrain(data.DataTrainDim.DataTrain);
+            else:    
+                sys.stderr.write("Start bez treninku - model bude nacten\n");
+                self.logger.info("Start bez treninku - model bude nacten");
+                model_x = load_model('./models/model_'+self.model_+'_'+ data.DataTrainDim.DataTrain.axis);
+            
+            data.DataResultDim.DataResultX = self.neuralNetworkLSTMpredict(model_x, data.DataTrainDim.DataTrain);
+            data.saveDataToPLC(self.txdat1, self.model_, self.typ);
+                
+            stopTime = datetime.now();
+            self.logger.info("cas vypoctu[s] %s",  str(stopTime - startTime));
+            return(0);        
+
+        except FileNotFoundError as e:
+            sys.stderr.write(f"Nenalezen model site pro osu X, zkuste nejdrive spustit s parametem train !!!\n" f"{e}");    
+            self.logger.error(f"Nenalezen model site pro osu X, zkuste nejdrive spustit s parametem train !!!\n" f"{e}");
+
+        except Exception as ex:
+            traceback.print_exc();
+            self.logger.error(traceback.print_exc());
+
+    #------------------------------------------------------------------------
+    # neuralNetworkLSTMexec
+    #------------------------------------------------------------------------
+    def neuralNetworkLSTMexec(self):
+        
+        try:
+            sys.stderr.write("Pocet GPU jader: "+ str(len(tf.config.experimental.list_physical_devices('GPU')))+"\n");
+
+            self.data = DataFactory(path_to_result=self.path_to_result, 
+                                    window=self.window,
+                                    logger=self.logger,
+                                    batch=self.batch,
+                                    debug_mode=self.debug_mode,
+                                    current_date=self.current_date );
+        
+            parms = [self.typ,
+                     self.model_,
+                     self.epochs,
+                     self.units,
+                     self.batch,
+                     self.actf,
+                     str(self.shuffling), 
+                     self.txdat1, 
+                     self.txdat2,
+                     str(self.current_date)];
+            
+            self.data.setParms(parms);
+        
+            self.data.Data = self.data.getData(shuffling=self.shuffling, timestamp_start=self.txdat1, timestamp_stop=self.txdat2);
+
+    # osa X    
+            if self.data.DataTrainDim.DataTrain  == None:
+                sys.stderr.write("Osa X je disable...\n");
+                self.logger.warning("Osa X je disable...");
+            else:
+                self.neuralNetworkLSTMexec_x(data=self.data, graph=self.graph);
+            
+        
+    # archivuj vyrobeny model site            
+            if self.typ == 'train':
+                saveModelToArchiv(model="LSTM", dest_path=self.path_to_result, data=self.data);
+            return(0);
+
+        except Exception as ex:
+            traceback.print_exc();
+            self.logger.error(traceback.print_exc());
+
+
+    #---------------------------------------------------------------------------
+    # setter - getter
+    #---------------------------------------------------------------------------
+    def getModel(self):
+        return self.model_;
+
+    def getTyp(self):
+        return self.typ;
+
+    def setTyp(self, typ):
+        self.typ = typ;
 
 #------------------------------------------------------------------------
 # Daemon    
 #------------------------------------------------------------------------
 class NeuroDaemon():
     
-    def __init__(self, pidfile, path_to_result, model, epochs, batch, units, shuffling, txdat1, txdat2, actf, window):
+    def __init__(self, 
+                 pidf, 
+                 logf, 
+                 path_to_result, 
+                 model, epochs, 
+                 batch, 
+                 units, 
+                 shuffling, 
+                 txdat1, 
+                 txdat2, 
+                 actf, 
+                 window, 
+                 debug_mode,
+                 current_date
+            ):
         
-        self.pidfile        = pidfile; 
+        self.pidf           = pidf; 
+        self.logf           = logf; 
         self.path_to_result = path_to_result;
-        self.model          = model;
+        self.model_         = model;
         self.epochs         = epochs;
         self.batch          = batch;
         self.units          = units;
@@ -1092,6 +1872,17 @@ class NeuroDaemon():
         self.txdat2         = txdat2;
         self.actf           = actf;
         self.window         = window;
+        self.debug_mode     = debug_mode;
+        self.current_date   = current_date;
+        
+        self.neural         = None;
+        self.logger         = None;
+        self.train_counter  = 0;
+        self.train_counter_max = 20;
+
+        
+        
+        
 #------------------------------------------------------------------------
 # file handlery pro file_preserve
 #------------------------------------------------------------------------
@@ -1105,6 +1896,39 @@ class NeuroDaemon():
             if logger.parent:
                 handles += self.getLogFileHandles(logger.parent)
         return handles
+
+
+
+
+#------------------------------------------------------------------------
+# file handlery pro file_preserve
+#------------------------------------------------------------------------
+    def setLogger(self, logf):
+        progname = os.path.basename(__file__);
+        '''
+        logging.basicConfig(filename=logf,
+                    filemode='a',
+                    level=logging.INFO,
+                    format='%(asctime)s - %(message)s',
+                    datefmt='%Y-%m-%d %H:%M:%S');
+        '''            
+        logging.basicConfig(filename=logf,
+                            format='%(asctime)s,%(msecs)d %(levelname)-8s [%(filename)s:%(lineno)d] %(message)s',
+                            filemode='a',
+                            datefmt='%Y-%m-%d:%H:%M:%S',
+                            level=logging.WARNING)
+                    
+
+        log_handler = logging.StreamHandler();
+
+        logger = logging.getLogger("parent");
+        logger.addHandler(log_handler)
+
+        #logging.getLogger("opcua").setLevel(logging.Critical)
+        
+        return(logger);
+
+
     
 #------------------------------------------------------------------------
 # file handlery pro file_preserve
@@ -1126,42 +1950,20 @@ class NeuroDaemon():
         return(log_handler);
     '''    
 
-        
 #------------------------------------------------------------------------
-# start daemon
+# start daemon pro parametr LSTM
 # tovarna pro beh demona
 #------------------------------------------------------------------------
-    def runDaemon(self):
-        
-        #treninkovy beh
-        neural = NeuronLayerDENSE(path_to_result = path_to_result, 
-                                  typ            ="train", 
-                                  model          = self.model, 
-                                  epochs         = self.epochs, 
-                                  batch          = self.batch,
-                                  txdat1         = self.txdat1,
-                                  txdat2         = self.txdat2,
-                                  window         = self.window,
-                                  units          = self.units,
-                                  shuffling      = self.shuffling,
-                                  actf           = self.actf 
-                                );
-        current_date =  datetime.now().strftime("%Y-%m-%d %H:%M:%S");
-        sys.stderr.write("start train:"+ current_date +"\n");
-        #logger.info("start train:"+ current_date);
-        neural.neuralNetworkDENSEexec();
+    def runDaemonLSTM(self):
 
-        #predikcni beh
+        global plc_isRunning;
         
-        while True:
-            
-            sleep_interval = 10;     #10 sekund
-            
-                
-            
-            neural = NeuronLayerDENSE(path_to_result=path_to_result, 
-                                      typ            ="predict", 
-                                      model          = self.model, 
+        self.logger = self.setLogger(self.logf);
+        self.train_counter = 0;
+
+        self.neural = NeuronLayerLSTM(path_to_result=path_to_result, 
+                                      typ            = "train", 
+                                      model          = self.model_, 
                                       epochs         = self.epochs, 
                                       batch          = self.batch,
                                       txdat1         = self.txdat1,
@@ -1169,18 +1971,123 @@ class NeuroDaemon():
                                       window         = self.window,
                                       units          = self.units,
                                       shuffling      = self.shuffling,
-                                      actf           = self.actf 
+                                      actf           = self.actf, 
+                                      logger         = self.logger,
+                                      debug_mode     = self.debug_mode,
+                                      current_date   = self.current_date
                                     );
-                                    
-            if not neural.isPing():
-                sleep_interval = 60; #60 sekund
-                sys.stderr.write("opc ping = False, prodlouzen thread sleep_interval na 60 [s]\n");
-                                    
-            current_date =  datetime.now().strftime("%Y-%m-%d_%H:%M:%S");
-            sys.stderr.write("start predict:"+ current_date +"\n");
-            #logger.info("start predict:"+ current_date);
-            neural.neuralNetworkDENSEexec();
+
+        
+
+        typ = "train";
+        
+        if plc_isRunning:
+            sleep_interval =  1;     # 1 sekunda
+        else:
+            sleep_interval =  600;     #600 sekund
+                
+            
+        #predikcni beh
+        while True:
+            current_date =  datetime.now().strftime("%Y-%m-%d %H:%M:%S");
+            #train
+            if plc_isRunning and self.train_counter == 0:
+                self.neural.setTyp("train");
+            #predict
+            if plc_isRunning and self.train_counter > 0:
+                self.neural.setTyp("predict");
+                
+            self.logger.info("TYP:"+ current_date + self.neural.getTyp());
+
+            if plc_isRunning:
+                
+                self.neural.neuralNetworkLSTMexec();
+
+                if self.train_counter < self.train_counter_max:
+                    sys.stderr.write("PLC ON:"+ current_date + " cnt:" + str(self.train_counter) +"\n");
+                    self.logger.warning("PLC ON:"+ current_date + " cnt:" + str(self.train_counter));
+                    self.train_counter = 1;
+                else:
+                    sys.stderr.write("PLC ON:"+ current_date + " cnt:" + str(self.train_counter) +" nasleduje trenink\n");
+                    self.logger.warning("PLC ON:"+ current_date + " cnt:" + str(self.train_counter) +" nasleduje trenink");
+                    self.train_counter = 0; # priprav na dalsi trenink
+            else:
+                sys.stderr.write("PLC OFF:"+ current_date +"\n");
+                self.logger.warning("PLC OFF:"+ current_date);
+                self.train_counter = 0;        
+                    
             time.sleep(sleep_interval);
+            
+            
+        
+#------------------------------------------------------------------------
+# start daemon pro parametr DENSE
+# tovarna pro beh demona
+#------------------------------------------------------------------------
+    def runDaemonDENSE(self):
+        
+        global plc_isRunning;
+        
+        self.logger = self.setLogger(self.logf);
+        self.train_counter = 0;
+
+        self.neural = NeuronLayerDENSE(path_to_result=path_to_result, 
+                                      typ            = "train", 
+                                      model          = self.model_, 
+                                      epochs         = self.epochs, 
+                                      batch          = self.batch,
+                                      txdat1         = self.txdat1,
+                                      txdat2         = self.txdat2,
+                                      window         = self.window,
+                                      units          = self.units,
+                                      shuffling      = self.shuffling,
+                                      actf           = self.actf, 
+                                      logger         = self.logger,
+                                      debug_mode     = self.debug_mode,
+                                      current_date   = self.current_date
+                                    );
+
+        
+
+        typ = "train";
+        
+        if plc_isRunning:
+            sleep_interval =  1;     # 1 sekunda
+        else:
+            sleep_interval =  600;     #600 sekund
+                
+            
+        #predikcni beh
+        while True:
+            current_date =  datetime.now().strftime("%Y-%m-%d %H:%M:%S");
+            #train
+            if plc_isRunning and self.train_counter == 0:
+                self.neural.setTyp("train");
+            #predict
+            if plc_isRunning and self.train_counter > 0:
+                self.neural.setTyp("predict");
+                
+            self.logger.warning("TYP:"+ current_date + self.neural.getTyp());
+
+            if plc_isRunning:
+                
+                self.neural.neuralNetworkDENSEexec();
+
+                if self.train_counter < self.train_counter_max:
+                    sys.stderr.write("PLC ON:"+ current_date + " cnt:" + str(self.train_counter) +"\n");
+                    self.logger.warning("PLC ON:"+ current_date + " cnt:" + str(self.train_counter));
+                    self.train_counter += 1;
+                else:
+                    sys.stderr.write("PLC ON:"+ current_date + " cnt:" + str(self.train_counter) +" nasleduje trenink\n");
+                    self.logger.warning("PLC ON:"+ current_date + " cnt:" + str(self.train_counter) +" nasleduje trenink");
+                    self.train_counter = 0; # priprav na dalsi trenink
+            else:
+                sys.stderr.write("PLC OFF:"+ current_date +"\n");
+                self.logger.warning("PLC OFF:"+ current_date);
+                self.train_counter = 0;        
+                    
+            time.sleep(sleep_interval);
+            
         
     #------------------------------------------------------------------------
     # info daemon
@@ -1189,7 +2096,7 @@ class NeuroDaemon():
         sys.stderr.write("daemon pro sledovani a kompenzaci teplotnich zmen stroje\n");
         return;
     #------------------------------------------------------------------------
-    # daemonize - zduchovateni....
+    # daemonize...
     #    do the UNIX double-fork magic, see Stevens' "Advanced
     #    Programming in the UNIX Environment" for details (ISBN 0201563177)
     #    http://www.erlenstar.demon.co.uk/unix/faq_2.html#SEC16
@@ -1199,14 +2106,15 @@ class NeuroDaemon():
         
         sys.stderr.write("daemonize.....\n");
 
-        l_handler = self.setLogHandler();
+        #l_handler = self.setLogHandler();
         
         context = daemon.DaemonContext(working_directory='./',
-                                       pidfile=lockfile.FileLock(self.pidfile),
+                                       #pidfile=lockfile.FileLock(self.pidf),
                                        stdout=sys.stdout,
                                        stderr=sys.stderr,
                                        umask=0o002,
-                                       files_preserve = [l_handler]
+                                       pidfile=pidfile.TimeoutPIDLockFile(self.pidf),                                       
+                                       #files_preserve = [l_handler]
                   );
 
         context.signal_map = {
@@ -1224,7 +2132,7 @@ class NeuroDaemon():
     def start(self):
         # Kontrola existence pid - daemon run...
         try:                                                                                                                
-            pf = open(self.pidfile,'r');                                                                                    
+            pf = open(self.pidf,'r');                                                                                    
             pid = int(pf.read().strip());                                                                                   
             pf.close();                                                                                                     
         except:                                                                                                             
@@ -1239,7 +2147,13 @@ class NeuroDaemon():
         
         try:
             with context:
-                self.runDaemon();
+                if "DENSE" in self.model_:
+                    self.runDaemonDENSE();
+                elif "LSTM" in self.model_:
+                    self.runDaemonLSTM();
+                else:    
+                    sys.stderr.write("chybny parametr model:"+self.model_+"\n");
+                    
         except (Exception, getopt.GetoptError)  as ex:
             traceback.print_exc();
             sys.stderr.write(+str(traceback.print_exc()));
@@ -1251,7 +2165,7 @@ class NeuroDaemon():
     #------------------------------------------------------------------------
     def stop(self):
         try:                                                                                                                
-            pf = open(self.pidfile,'r');                                                                                    
+            pf = open(self.pidf,'r');                                                                                    
             pid = int(pf.read().strip());                                                                                   
             pf.close();                                                                                                     
         except:                                                                                                             
@@ -1268,7 +2182,21 @@ class NeuroDaemon():
             os._exit(0);
 
             
+    #------------------------------------------------------------------------
+    # getter, setter metody
+    #------------------------------------------------------------------------
+    def getDebug(self):
+        return self.debug_mode;
     
+    def setDebug(self, debug_mode):
+        self.debug_mode = debug_mode;
+
+    def getLogf(self):
+        return self.logf;
+    
+    def getPidf(self):
+        return self.pidf;
+
 
 #------------------------------------------------------------------------
 # MAIN CLASS
@@ -1306,7 +2234,7 @@ def saveModelToArchiv(model, dest_path, data):
 def setEnv(path, model, type):
 
         progname = os.path.basename(__file__);
-        current_date =  datetime.now().strftime("%Y-%m-%d_%H:%M:%S");
+        current_date =  datetime.now().strftime("%Y-%m-%d %H:%M:%S");
         path1 = path+model+"_3D";
         path2 = path1+"/"+current_date+"_"+type
                 
@@ -1317,20 +2245,25 @@ def setEnv(path, model, type):
             pass;
         
         try: 
-            os.mkdir("./run");
+            os.mkdir("./pid");
+        except OSError as error: 
+            pass; 
+ 
+        try: 
+            os.mkdir("./result")
+        except OSError as error: 
+            pass;
+        
+        try: 
+            os.mkdir("./result/plc_archiv")
         except OSError as error: 
             pass; 
  
 
         try: 
-            os.mkdir("./result")
+            os.mkdir("./temp");
         except OSError as error: 
-            pass; 
-
-        try: 
-            os.mkdir(path1);
-        except OSError as error: 
-            pass; 
+            pass;
         
         try: 
             os.mkdir(path2);
@@ -1345,42 +2278,9 @@ def setEnv(path, model, type):
         try: 
             os.mkdir("./models");
         except OSError as error: 
-            pass; 
-
-        try:
-            shutil.copy(progname, path2+"/src");
-        except shutil.SpecialFileError as error:
-            print("Chyba pri kopii zdrojoveho kodu.", error)
-        except:
-            print("Chyba pri kopii zdrojoveho kodu.")
-
-        try:
-            shutil.copy("ai-parms.txt", path2+"/src");
-        except shutil.SpecialFileError as error:
-            print("Chyba pri kopii ai-parms.txt.", error)
-        except:
-            print("Chyba pri kopii ai-parms.txt.")
-            
-        #logging.basicConfig(filename='./log/'+progname+'.log',
-        #    filemode='a',level=logging.INFO,
-        #    format='%(asctime)s - %(message)s',
-        #    datefmt='%Y-%m-%d %H:%M:%S');
-            
-        #logger = logging.getLogger()
-        #logger.setLevel(logging.DEBUG)
-        #fh = logging.FileHandler("./foo.log")
-        #logger.addHandler(fh)
-        
-        #file_logger = logging.FileHandler("/tmp/aaa.log", "w")
-        #logger = logging.getLogger()
-        #logger.addHandler(file_logger)
-        #logger.setLevel(logging.INFO)
-        #with daemon.DaemonContext(files_preserve=[file_logger.stream.fileno()]):
-        #    while True:
-        #        logger.info(datetime.now())
-        #        sleep(1)
-
-        return path2    
+            pass;
+         
+        return path2, current_date;    
 
 #------------------------------------------------------------------------
 # Exception handler
@@ -1397,18 +2297,48 @@ def exception_handler(exctype, value, tb):
 def help (activations):
     print ("HELP:");
     print ("------------------------------------------------------------------------------------------------------ ");
-    print ("pouziti: <nazev_programu> <arg1> <arg2> <arg3> <arg4>");
-    print ("ai-daemon.py -t1 <--txdat1> -t2 <--txdat2> ")
+    print ("pouziti: <nazev_programu> <arg-1> <arg-2> <arg-3>,..., <arg-n>");
     print (" ");
     print ("        --help            list help ")
-    print ("        --txdat1          timestamp zacatku datove mnoziny pro train, napr '2022-04-09 08:00:00' ")
     print (" ");
-    print ("        --txdat2          timestamp konce   datove mnoziny pro train, napr '2022-04-09 12:00:00' ")
+    print (" ");
+    print ("        --model           model neuronove site 'DENSE', 'LSTM', 'GRU', 'BIDI'")
+    print ("                                 DENSE - zakladni model site - nejmene narocny na system")
+    print ("                                 LSTM - Narocny model rekurentni site s feedback vazbami")
+    print (" ");
+    print ("        --epochs          pocet ucebnich epoch - cislo v intervalu <1,256>")
+    print ("                                 pocet epoch urcuje miru uceni. POZOR!!! i zde plati vseho s mirou")
+    print ("                                 Pri malych cislech se muze stat, ze sit bude nedoucena ")
+    print ("                                 a pri velkych cislech preucena - coz je totez jako nedoucena.")
+    print ("                                 Jedna se tedy o podstatny parametr v procesu uceni site.")
+    print (" ");
+    print ("        --units           pocet vypocetnich jednotek cislo v intervalu <32,1024>")
+    print ("                                 Pocet vypocetnich jednotek urcuje pocet neuronu zapojenych do vypoctu.")
+    print ("                                 Mějte prosím na paměti, že velikost units ovlivňuje"); 
+    print ("                                 dobu tréninku, chybu, které dosáhnete, posuny gradientu atd."); 
+    print ("                                 Neexistuje obecné pravidlo, jak urcit optimalni velikost parametru units.");
+    print ("                                 Obecne plati, ze maly pocet neuronu vede k nepresnym vysledkum a naopak");
+    print ("                                 velky pocet units muze zpusobit preuceni site - tedy stejny efekt jako pri");
+    print ("                                 nedostatecnem poctu units. Pamatujte, ze pocet units vyrazne ovlivnuje alokaci");
+    print ("                                 pameti. pro 1024 units je treba minimalne 32GiB u siti typu LSTM, GRU nebo BIDI.");
+    print (" ");
+    print ("                                 Plati umera: cim vetsi units tim vetsi naroky na pamet.");
+    print ("                                              cim vetsi units tim pomalejsi zpracovani.");
+    print (" ");
+    print ("        --actf            Aktivacni funkce - jen pro parametr DENSE")
+    print ("                                 U LSTM, GRU a BIDI se neuplatnuje.")
+    print ("                                 Pokud actf neni uvedan, je implicitne nastaven na 'tanh'."); 
+    print ("                                 U site GRU, LSTM a BIDI je implicitne nastavena na 'tanh' ");
+    print (" ");
+    print (" ");
+    print ("        --txdat1          timestamp zacatku datove mnoziny pro predict, napr '2022-04-09 08:00:00' ")
+    print (" ");
+    print ("        --txdat2          timestamp konce   datove mnoziny pro predict, napr '2022-04-09 12:00:00' ")
     print (" ");
     print ("                                 parametry txdat1, txdat2 jsou nepovinne. Pokud nejsou uvedeny, bere");
-    print ("                                 se v uvahu cela mnozina dat k trenovani.");
-    print (" ");
-    print (" ");
+    print ("                                 se v uvahu cela mnozina dat k trenovani, to znamena:");
+    print ("                                 od pocatku mereni: 2022-02-15 00:00:00 ");
+    print ("                                 do konce   mereni: current timestamp() - 1 [den] ");
     print (" ");
     print ("POZOR! typ behu 'train' muze trvat nekolik hodin, zejmena u typu site LSTM, GRU nebo BIDI!!!");
     print ("       pricemz 'train' je povinny pri prvnim behu site. V rezimu 'train' se zapise ");
@@ -1486,25 +2416,46 @@ def checkActf(actf, activations):
 def main(argv):
     
     global path_to_result;
-    path_to_result = "./result";
-    pidfile = "./run/ai-daemon.pid"
-    
+    global current_date;
+    global plc_isRunning
     global g_window;
-    g_window = 48;
+    g_window = 24;
+    plc_isRunning = True;
     
-    parm0  = sys.argv[0];        
-    model  = "DENSE";
-    epochs = 128;
-    batch  = 128;
-    units  = 128;
-    txdat1 = "2022-02-15 00:00:00";
-    txdat2 = datetime.now().strftime("%Y-%m-%d %H:%M:%S");
-    shuffling = False;
-    actf = "tanh";
-    pid = 0;
-    status = "";
-    startTime = datetime.now();
-    type = "train";
+    path_to_result = "./result";
+    current_date ="";
+    pidf = "./pid/ai-daemon.pid"
+    logf = "./log/ai-daemon.log"
+    
+    '''
+    debug_mode - parametr pro ladeni programu, pokud nejedou OPC servery, 
+    data se nacitaji ze souboru, csv_file = "./br_data/predict-debug.csv", 
+    ktery ma stejny format jako data z OPC serveruuu.
+    
+    debug_mode se zaroven posila do DataFactory.getData, kde se rozhoduje,
+    zda se budou data cist z OPC a nebo z predict-debug souboru. 
+    V predict-debug souboru jsou data nasbirana z OPC serveru 
+    v intervalu<2022-07-19 08:06:01, 2022-07-19 11:56:08> v sekundovych
+    vzorcich.
+    '''
+    
+    
+    # parametry 
+    parm0          = sys.argv[0];        
+    model          = "DENSE";
+    epochs         = 48;
+    batch          = 64;
+    units          = 71;
+    txdat1         = "2022-02-15 00:00:00";
+    txdat2         = (datetime.now() + timedelta(days=-1)).strftime("%Y-%m-%d %H:%M:%S");
+    shuffling      = False;
+    actf           = "relu";
+    pid            = 0;
+    status         = "";
+    startTime      = datetime.now();
+    type           = "train";
+    debug_mode     = False;
+    #debug_mode     = True;
     
         
     activations = [["deserialize", "Returns activation function given a string identifier"],
@@ -1522,27 +2473,13 @@ def main(argv):
                    ["softplus","Softplus activation function: softplus(x) = log(exp(x) + 1)"],
                    ["softsign","Softsign activation function: softsign(x) = x / (abs(x) + 1)"],
                    ["swish","Swish activation function: swish(x) = x * sigmoid(x)"],
-                   ["tanh","Hyperbolic tangent activation function"]];
+                   ["tanh","Hyperbolic tangent activation function"],
+                   ["None","pro GRU a LSTM site"]];
 
 
         #init objektu daemona
-    path_to_result = setEnv(path=path_to_result, model=model, type=type);
+    path_to_result, current_date = setEnv(path=path_to_result, model=model, type=type);
         
-    daemon_ = NeuroDaemon(pidfile        = pidfile,
-                         path_to_result = path_to_result,
-                         model          = model,
-                         epochs         = epochs,
-                         batch          = batch,
-                         units          = units,
-                         shuffling      = shuffling,
-                         txdat1         = txdat1, 
-                         txdat2         = txdat2,
-                         actf           = actf,
-                         window         = g_window
-                );
-       
-    daemon_.info();
-
     try:
         sys.stderr.write("start...\n");
         #logger.info("start...");
@@ -1557,22 +2494,109 @@ def main(argv):
         print("Verze TensorFlow :", tf.__version__);
         
         txdat_format = "%Y-%m-%d %h:%m:%s"
+
+        opts = [];
+        args = [];
         try:
-            opts, args = getopt.getopt(sys.argv[1:],"hs:t1:t2:h:x",["status=","txdat1=","txdat2=", "help="])
+            opts, args = getopt.getopt(sys.argv[1:],
+                                       "hs:d:p:l:m:e:b:u:a:t1:t2:h:x",
+                                      ["status=",
+                                       "debug_mode=", 
+                                       "pidfile=", 
+                                       "logfile=", 
+                                       "model=", 
+                                       "epochs=", 
+                                       "batch=", 
+                                       "units=", 
+                                       "actf=", 
+                                       "txdat1=", 
+                                       "txdat2=", 
+                                       "help="]
+                                    );
+            
         except getopt.GetoptError:
-            print("Chyba pri parsovani parametru:");
+            print("Chyba pri parsovani parametru:",opts);
             help(activations);
+            sys.exit(1);
             
         for opt, arg in opts:
             
             if opt in ["-s","--status"]:
                 status = arg;
+                
                 if "start" in status or "stop" in status or "restart" in status or "status" in status:
                     pass;
                 else:
                     print("Chyba stavu demona povoleny jen <start, stop, restart a status");
                     help(activations);
                     sys.exit(1);    
+                    
+            elif opt in ["-d","--debug_mode"]:    #debug nodebug....
+                
+                if "nodebug" in arg.lower():
+                    debug_mode = False;
+                    txdat2 = (datetime.now() + timedelta(days=-1)).strftime("%Y-%m-%d %H:%M:%S");
+                else:
+                    debug_mode = True;
+                    txdat2 = "2022-06-29 23:59:59";
+            
+            elif opt in ["-p","--pidfile"]:
+                pidf = arg;
+        
+            elif opt in ["-l","--logfile"]:
+                logf = arg;
+
+            elif opt in ("-m", "--model"):
+                model = arg.upper();
+                
+            elif opt in ("-e", "--epochs"):
+                try:
+                    r = range(32-1, 256+1);
+                    epochs = int(arg);
+                    if epochs not in r:
+                        print("Chyba pri parsovani parametru: parametr 'epochs' musi byt cislo typu integer v rozsahu <32, 256>");
+                        help(activations);
+                        sys.exit(1)    
+                        
+                except:
+                    print("Chyba pri parsovani parametru: parametr 'epochs' musi byt cislo typu integer v rozsahu <32, 256>");
+                    help(activations);
+                    sys.exit(1);
+                        
+            elif opt in ("-u", "--units"):
+                try:
+                    r = range(8-1, 2048+1);
+                    units = int(arg);
+                    if units not in r:
+                        print("Chyba pri parsovani parametru: parametr 'units' musi byt cislo typu integer v rozsahu <8, 2048>");
+                        help(activations);
+                        sys.exit(1);    
+                except:    
+                    print("Chyba pri parsovani parametru: parametr 'units' musi byt cislo typu integer v rozsahu <8, 2048>");
+                    help(activations);
+                    sys.exit(1);
+
+            elif opt in ["-af","--actf"]:
+                actf = arg.lower();
+                if actf == "DENSE":
+                    if not checkActf(actf, activations):
+                        print("Chybna aktivacni funkce - viz help...");
+                        help(activations)
+                        sys.exit(1);
+                        
+            elif opt in ("-b", "--batch"):
+                try:
+                    r = range(16-1, 2048+1);
+                    batch = int(arg);
+                    if batch not in r:
+                        print("Chyba pri parsovani parametru: parametr 'batch' musi byt cislo typu integer v rozsahu <16, 2048>");
+                        help(activations);
+                        sys.exit(1)    
+                except:    
+                    print("Chyba pri parsovani parametru: parametr 'batch' musi byt cislo typu integer v rozsahu <16, 2048>");
+                    help(activations);
+                    sys.exit(1)
+                    
 
             elif opt in ["-t1","--txdat1"]:
                 txdat1 = arg;
@@ -1583,7 +2607,7 @@ def main(argv):
                         print("Chyba formatu txdat1, musi byt YYYY-MM-DD HH:MM:SS");
                         help(activations);
                         sys.exit(1);    
-        
+
             elif opt in ["-t2","--txdat2"]:
                 txdat2 = arg;
                 if txdat2:
@@ -1593,7 +2617,7 @@ def main(argv):
                         print("Chyba formatu txdat2, musi byt YYYY-MM-DD HH:MM:SS");
                         help(activations);
                         sys.exit(1);    
-        
+
          
             elif opt in ["-h","--help"]:
                 help(activations);
@@ -1603,29 +2627,61 @@ def main(argv):
             help(activations);
             sys.exit(1);
             
+            
         #-----------------------------------------------------------------------------
         #obsluha demona
         #-----------------------------------------------------------------------------
-        if 'start' in status:
+        if "start" in status:
             try:
-                sys.stderr.write("ai-daemon start....\n");
-                daemon_.start();
-                #daemon_.runDaemon();
+                
+                # new NeuroDaemon
+                daemon_ = NeuroDaemon(pidf           = pidf,
+                                      logf           = logf,
+                                      path_to_result = path_to_result,
+                                      model          = model,
+                                      epochs         = epochs,
+                                      batch          = batch,
+                                      units          = units,
+                                      shuffling      = shuffling,
+                                      txdat1         = txdat1, 
+                                      txdat2         = txdat2,
+                                      actf           = actf,
+                                      window         = g_window,
+                                      debug_mode     = debug_mode,
+                                      current_date   = current_date
+                                );
+       
+                daemon_.info();
+                
+                if debug_mode:
+                    sys.stderr.write("ai-daemon run v debug mode...\n");
+                    if "DENSE" in model:
+                        daemon_.runDaemonDENSE();
+                    else:    
+                        daemon_.runDaemonLSTM();
+                else:    
+                    sys.stderr.write("ai-daemon start...\n");
+                    if "DENSE" in model:
+                        daemon_.runDaemonDENSE();
+                    else:    
+                        daemon_.runDaemonLSTM();
+                    #daemon_.start();
+                    
             except:
                 traceback.print_exc();
                 sys.stderr.write(str(traceback.print_exc()));
                 sys.stderr.write("ai-daemon start exception...\n");
                 pass
             
-        elif 'stop' in status:
+        elif "stop" in status:
             sys.stderr.write("ai-daemon stop...\n");
             daemon_.stop();
             
-        elif 'restart' in status:
+        elif "restart" in status:
             sys.stderr.write("ai-daemon restart...\n");
             daemon_.restart()
             
-        elif 'status' in status:
+        elif "status" in status:
             try:
                 pf = file(PIDFILE,'r');
                 pid = int(pf.read().strip())
@@ -1639,7 +2695,7 @@ def main(argv):
             else:
                 sys.stderr.write("Daemon ai-daemon je ve stavu stop....\n");
         else:
-            sys.stderr.write("Neznamy parametr:<"+status+">");
+            sys.stderr.write("Neznamy parametr:<"+status+">\n");
             sys.exit(0)
         
     except (Exception, getopt.GetoptError)  as ex:
