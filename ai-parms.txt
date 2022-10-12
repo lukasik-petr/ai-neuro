@@ -1,0 +1,23 @@
+# NAVRH VUT
+# 1 inputs : temp_vr07, 
+# 2 inputs : temp_vr02, temp_vr07, 
+# 3 inputs : temp_st02, temp_vr02, temp_vr07, 
+# 4 inputs : temp_lo03, temp_st02, temp_vr02, temp_vr07, 
+# 5 inputs : temp_lo03, temp_st02, temp_vr02, temp_vr06, temp_vr07, 
+# 6 inputs : temp_lo01, temp_lo03, temp_st02, temp_vr02, temp_vr06, temp_vr07, 
+# 7 inputs : temp_lo03, temp_st01, temp_st02, temp_vr02, temp_vr04, temp_vr06, temp_vr07, 
+# 8 inputs : temp_lo03, temp_st02, temp_vr02, temp_vr03, temp_vr04, temp_vr06, temp_vr07, vstup_temp, 
+# 9 inputs : temp_x, temp_lo03, temp_st02, temp_vr02, temp_vr03, temp_vr04, temp_vr06, temp_vr07, vstup_temp, 
+#10 inputs : temp_x, temp_lo03, temp_st02, temp_st06, temp_st07, temp_vr02, temp_vr03, temp_vr04, temp_vr06, temp_vr07, 
+#11 inputs : temp_x, temp_lo03, temp_st02, temp_st06, temp_st07, temp_st08, temp_vr02, temp_vr03, temp_vr04, temp_vr06, temp_vr07, 
+#12 inputs : temp_x, temp_lo03, temp_st02, temp_st06, temp_st07, temp_st08, temp_vr02, temp_vr03, temp_vr04, temp_vr06, temp_vr07, temp_ambient, 
+#13 inputs : temp_x, temp_lo03, temp_st02, temp_st06, temp_st07, temp_st08, temp_vr02, temp_vr03, temp_vr04, temp_vr06, temp_vr07, light_ambient, temp_ambient
+
+
+#Vystupni list parametru - co budeme chtit po siti predikovat
+df_parmx = temp_lo03, temp_st02, temp_st06, temp_st07, temp_S1, temp_pr01,temp_pr02, temp_pr03, temp_vr01, temp_vr02, temp_vr03, temp_vr04, temp_vr05, temp_vr06, temp_vr07
+
+#Tenzor predlozeny k uceni site
+df_parmX =  dev_x4, dev_y4, dev_z4, temp_lo03, temp_st02, temp_st06, temp_st07, temp_S1, temp_pr01,temp_pr02, temp_pr03, temp_vr01, temp_vr02, temp_vr03, temp_vr04, temp_vr05, temp_vr06, temp_vr07
+
+ 

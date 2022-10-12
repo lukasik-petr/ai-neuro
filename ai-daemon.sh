@@ -1,14 +1,15 @@
 #!/bin/bash
+cd ~/ai/ai-daemon/src
 
 #----------------------------------------------------------------------
-# ai-daemon      Startup skript pro ai-daemona
+# ai-ad      Startup skript pro ai-ad demona
 #----------------------------------------------------------------------
 FILE_PATH=$(pwd)
 # Environment Miniconda.
 export PYTHONPATH="/home/plukasik/miniconda3/pkgs:$PYTHONPATH"
 export CONDA_HOME="/home/plukasik/miniconda3"
 export PATH=${CONDA_HOME}/bin:${PATH}
-
+export TF_ENABLE_ONEDNN_OPTS=0
 
 prog=$FILE_PATH"/ai-daemon.py"
 pidfile=${PIDFILE-$FILE_PATH/pid/ai-daemon.pid}
@@ -21,12 +22,11 @@ RETVAL=0
 STATUS="$1"
 DEBUG_MODE="nodebug"
 MODEL="DENSE"
-EPOCHS="64"
-BATCH="256"
-UNITS="71"
+EPOCHS="52"
+BATCH="128"
+UNITS="75"
 ACTF="elu"
 TXDAT1='2022-02-15 00:00:00'
-#TXDAT2='2022-04-10 23:59:59'
 TXDAT2=`date +%Y-%m-%d -d "yesterday"`" 23:59:59"
 OPTIONS=""
 
@@ -36,11 +36,14 @@ OPTIONS=""
 #----------------------------------------------------------------------
 start_daemon(){
     curr_timestamp=`date "+%Y-%m-%d %H:%M:%S"`
+    echo ""
+    echo "----------------------------------------------------------------"
+    echo "Demon pro kompenzaci teplotnich anomalii na stroji pro osy X,Y,Z"
     echo "Start ulohy: "$curr_timestamp
-    cd ~/ai/ai-daemon/src
+    echo "Treninkova mnozina v rozsahu: "$TXDAT1" : "$TXDAT2
+    echo "----------------------------------------------------------------"
     eval "$(conda shell.bash hook)"
     conda activate tf
-    echo "Demon pro kompenzaci teplotnich anomalii na stroji pro osy X,Y,Z"
     python3 ai-daemon.py \
 	    --status="$STATUS" \
 	    --debug_mode="$DEBUG_MODE"\
