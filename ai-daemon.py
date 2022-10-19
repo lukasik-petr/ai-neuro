@@ -1,10 +1,10 @@
 #!/usr/bin/python3
 
-#------------------------------------------------------------------------------
+#------------------------------------------------------------------------
 # ai-daemon
 # (C) GNU General Public 1License,
 # pro potreby projektu TM-AI vyrobil Petr Lukasik , 2022 ");
-#------------------------------------------------------------------------------
+#------------------------------------------------------------------------
 # program pro projekt TM-AI v TAJMAC-ZPS,a.s.
 # predikce vlivu teploty na presnost obrabeni
 # Prerekvizity: linux Debian-11 nebo Ubuntu-20.04,);
@@ -47,7 +47,7 @@
 #
 #  6. v prostredi tf jeste upgrade tensorflow 
 #       pip3 install --upgrade tensorflow
-#------------------------------------------------------------------------------
+#------------------------------------------------------------------------
 # import vseho co souvisi s demonem...
 import sys, os, getopt; 
 import traceback;
@@ -137,17 +137,17 @@ from logging import handlers
 
 
 
-#---------------------------------------------------------------------------
+#------------------------------------------------------------------------
 # nastaveni globalnich parametru logu pro demona
-#---------------------------------------------------------------------------
+#------------------------------------------------------------------------
 logger = None;
 log_handler = None;
 df_debug_count=0;
 df_debug_header=[];
 
-#---------------------------------------------------------------------------
+#------------------------------------------------------------------------
 # OPCAgent
-#---------------------------------------------------------------------------
+#------------------------------------------------------------------------
 class OPCAgent():
 
     @dataclass
@@ -190,10 +190,10 @@ class OPCAgent():
         
         
         
-    #---------------------------------------------------------------------------
-    # ping_         
-    #---------------------------------------------------------------------------
-    def ping_(self, host):
+#------------------------------------------------------------------------
+# ping_         
+#------------------------------------------------------------------------
+    def pingSys(self, host, port):
         
         parameter = '-n' if platform.system().lower()=='windows' else '-c';                                                 
                                                                                                                             
@@ -201,15 +201,17 @@ class OPCAgent():
         response = call(command);                                                                                           
                                                                                                                             
         if response == 0:    
+            self.logger.debug("pingSys: %s %d ok..." %(host) %(port));
             self.is_ping = True;                                                                                               
             return self.is_ping;                                                                                                    
         else:                                                                                                               
+            self.logger.error("pingSys: %s %d is not responding..." %(host) %(port));
             self.is_ping = False;                                                                                               
             return self.is_ping;
         
-    #------------------------------------------------------------------------------        
-    # pingSocket - nepotrebuje root prava...
-    #------------------------------------------------------------------------------
+#---------------------------------------------------------------------------        
+# pingSocket - nepotrebuje root prava...
+#---------------------------------------------------------------------------
     def pingSocket(self, host, port):
 
         self.is_ping = False;
@@ -225,52 +227,53 @@ class OPCAgent():
                 socket_.settimeout(1);
                 # Try to Connect
                 socket_.connect((host, int(port)));
+                self.logger.debug("pingSocket: %s ok..." %(host));
                 self.is_ping = True;
                 return(self.is_ping);
 
             except socket.error as err:
-                self.logger.info("pingSocket: failed with error %s" %(err));
+                self.logger.error("pingSocket: failed with error %s %s" %(host) %(err));
                 self.is_ping = False;
                 return(self.is_ping);
 
                 # Connect TimeOut
-            except socket.timeout:
-                self.logger.info("pingSocket: socket.timeout return(False)");
+            except socket.timeout as err:
+                self.logger.error("pingSocket: socket.timeout %s %s" %(host) %(err));
                 self.is_ping = False;
                 return(self.is_ping);
                 
                 # OS error
-            except OSError as e:
-                self.logger.info("pingSocket: OSError return(False)");
+            except OSError as err:
+                self.logger.error("pingSocket: OSError %s %s" %(host) %(err));
                 self.is_ping = False;
                 return(self.is_ping);
                 
 
                 # Connect refused
-            except ConnectionRefusedError as e:    
-                self.logger.info("pingSocket: ConnectionRefusedError return(False)");
+            except ConnectionRefusedError as err:    
+                self.logger.error("pingSocket: ConnectionRefusedError %s %s" %(host) %(err));
                 self.is_ping = False;
                 return(self.is_ping);
                 
                 # Other error
             except:    
-                self.logger.info("pingSocket: OtherError return(False)");
+                self.logger.error("pingSocket: OtherError  %s %s" %(host) %(err));
                 self.is_ping = False;
                 return(self.is_ping);
 
             finally:
-                #socket_.shutdown(socket.SHUT_RD);
-                socket_.close();
+                socket_.shutdown(socket.SHUT_RD);
+                #socket_.close();
 
         # end while            
 
-        self.logger.info("pingSocket: ping return(False)");
+        self.logger.error("pingSocket: ping return(False)");
         return(self.is_ping);    
                                                                                                             
         
-    #---------------------------------------------------------------------------
-    # opcCollectorBR_PLC - opc server BR
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# opcCollectorBR_PLC - opc server BR
+#------------------------------------------------------------------------
     def opcCollectorBR_PLC(self):
         
         plc_isRunning = True;
@@ -314,7 +317,7 @@ class OPCAgent():
         client = Client(self.uri1)
         try:        
             client.connect();
-            self.logger.info("Client: " + self.uri1 + " connect.....")
+            self.logger.debug("Client: " + self.uri1 + " connect.....")
             plc_br_table = np.c_[plc_br_table, np.zeros(len(plc_br_table))];
             
             for i in range(len(plc_br_table)):
@@ -335,9 +338,9 @@ class OPCAgent():
  
 
 
-    #---------------------------------------------------------------------------
-    # opcCollectorHH_PLC - opc server PLC HEIDENHAIN
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# opcCollectorHH_PLC - opc server PLC HEIDENHAIN
+#------------------------------------------------------------------------
     def opcCollectorHH_PLC(self):
         
         plc_isRunning = True;
@@ -391,7 +394,7 @@ class OPCAgent():
         client = Client(self.uri2);
         try:        
             client.connect();
-            self.logger.info("Client: " + self.uri2+ " connect.....")
+            self.logger.debug("Client: " + self.uri2+ " connect.....")
             
             plc_hh_table = np.c_[plc_hh_table, np.zeros(len(plc_hh_table))];
             
@@ -420,19 +423,19 @@ class OPCAgent():
             client.disconnect(); 
             return(plc_hh_table, plc_isRunning);
 
-    #---------------------------------------------------------------------------
-    # opcCollectorSendToPLC - zapis kompenzacni parametry do PLC HEIDENHAIN
-    #
-    # OPC Strom: TM-AI
-    #              +---Compensation
-    #                   +---CompX         
-    #                   +---CompY         
-    #                   +---CompZ         
-    #                   +---setCompX         
-    #                   +---setCompY         
-    #                   +---setCompZ         
-    #                   +---write_comp_val_TM_AI         
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# opcCollectorSendToPLC - zapis kompenzacni parametry do PLC HEIDENHAIN
+#
+# OPC Strom: TM-AI
+#              +---Compensation
+#                   +---CompX         
+#                   +---CompY         
+#                   +---CompZ         
+#                   +---setCompX         
+#                   +---setCompY         
+#                   +---setCompZ         
+#                   +---write_comp_val_TM_AI         
+#------------------------------------------------------------------------
     def opcCollectorSendToPLC(self, df_plc):
         
         plc_isRunning = True;
@@ -520,13 +523,13 @@ class OPCAgent():
             client.disconnect();
                 
     
-    #---------------------------------------------------------------------------
-    # prepJitter,  setJitter
-    # v pripade ze se v prubehu cteciho cykluz OPC zadna data nezmeni 
-    # je nutno jim pridat umele sum, ktery nezhorsi presnost ale umozni
-    # neuronove siti predikci. Sit se nedokaze vyrovnat s konstantnim
-    # prubehem datove sady.
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# prepJitter,  setJitter
+# v pripade ze se v prubehu cteciho cykluz OPC zadna data nezmeni 
+# je nutno jim pridat umele sum, ktery nezhorsi presnost ale umozni
+# neuronove siti predikci. Sit se nedokaze vyrovnat s konstantnim
+# prubehem datove sady.
+#------------------------------------------------------------------------
     def prepJitter(self, df_size):
         
         jitter = np.random.normal(0, .0005, df_size);
@@ -535,9 +538,9 @@ class OPCAgent():
         return jitter;    
         #return(pd.DataFrame(jitter, columns=["jitter"]));
 
-    #---------------------------------------------------------------------------
-    # prepJitter,  setJitter
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# prepJitter,  setJitter
+#------------------------------------------------------------------------
     def setJitter(self, df, df_parms, jitter_=False):
         
         if not jitter_:
@@ -553,11 +556,11 @@ class OPCAgent():
     
     
 
-    #---------------------------------------------------------------------------
-    # opcCollectorGetPLCdata - nacti PLC HEIDENHAIN + PLC BR
-    # zapis nactena data do br_data - rozsireni treninkove mnoziny 
-    # o data z minulosti
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# opcCollectorGetPLCdata - nacti PLC HEIDENHAIN + PLC BR
+# zapis nactena data do br_data - rozsireni treninkove mnoziny 
+# o data z minulosti
+#------------------------------------------------------------------------
     def opcCollectorGetPlcData(self, df_parms):
 
         plc_isRunning = True;
@@ -607,12 +610,12 @@ class OPCAgent():
             
         return(df_predict);
     
-    #---------------------------------------------------------------------------
-    # opcCollectorGetDebugData - totez co opcCollectorGetPLCdata ovsem
-    # data se nectou z OPC ale  z CSV souboru. Toto slouzi jen pro ladeni
-    # abychom nebyli zavisli na aktivite OPC serveruuuuu.
-    # v pripade ladeni se nezapisuji treninkova data....
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# opcCollectorGetDebugData - totez co opcCollectorGetPLCdata ovsem
+# data se nectou z OPC ale  z CSV souboru. Toto slouzi jen pro ladeni
+# abychom nebyli zavisli na aktivite OPC serveruuuuu.
+# v pripade ladeni se nezapisuji treninkova data....
+#------------------------------------------------------------------------
     def opcCollectorGetDebugData(self, df_parms):
 
         plc_isRunning = True;
@@ -655,22 +658,22 @@ class OPCAgent():
             
         return(df_predict);
     
-    #---------------------------------------------------------------------------
-    # myFloatFormat         
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# myFloatFormat         
+#------------------------------------------------------------------------
     def myFloatFormat(self, x):
         return ('%.6f' % x).rstrip('0').rstrip('.');
 
-    #---------------------------------------------------------------------------
-    # myIntFormat         
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# myIntFormat         
+#------------------------------------------------------------------------
     def myIntFormat(self, x):
         return ('%.f' % x).rstrip('.');
 
 
-    #---------------------------------------------------------------------------
-    # isPing ????         
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# isPing ????         
+#------------------------------------------------------------------------
     def isPing(self):
         plc_isRunning = True;
 
@@ -689,9 +692,9 @@ class OPCAgent():
     
 
 
-#---------------------------------------------------------------------------
+#------------------------------------------------------------------------
 # DataFactory
-#---------------------------------------------------------------------------
+#------------------------------------------------------------------------
 class DataFactory():
 
     df_parmX_predict = [];
@@ -778,7 +781,9 @@ class DataFactory():
                       "shuffling", 
                       "txdat1", 
                       "txdat2",
-                      "curr_txdat"]; 
+                      "curr_txdat"];
+
+        self.df_recc = 0;
 
 
         #parametry z parm file - nacte parametry z ./parms/parms.txt
@@ -786,9 +791,9 @@ class DataFactory():
         # new OPCAgent()
         self.opc = OPCAgent(batch=self.batch);
 
-    #---------------------------------------------------------------------------
-    # setDataX(self, df,  size_train, size_valid, size_test)
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# setDataX(self, df,  size_train, size_valid, size_test)
+#------------------------------------------------------------------------
     def setDataX(self, df, df_test,  size_train, size_valid, size_test, txdt_b=False, shuffling=False):
         #OSA XYZ
         try:
@@ -818,17 +823,17 @@ class DataFactory():
             traceback.print_exc();
             self.logger.error(traceback.print_exc());
 
-    #---------------------------------------------------------------------------
-    # interpolateDF
-    # interpoluje data splinem - vyhlazeni schodu na merenych artefaktech
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# interpolateDF
+# interpoluje data splinem - vyhlazeni schodu na merenych artefaktech
+#------------------------------------------------------------------------
     def interpolateDF(self, df, smoothing_factor, ip_yesno):
 
         if not ip_yesno:
             self.logger.debug("interpolace artefaktu nebude provedena ip = False");
             return df;
         else:
-            self.logger.info("interpolace artefaktu, smoothing_factor:" + str(smoothing_factor)+"");
+            self.logger.debug("interpolace artefaktu, smoothing_factor:" + str(smoothing_factor)+"");
         
         col_names = list(self.df_parmX);
         x = np.arange(0,len(df));
@@ -841,13 +846,14 @@ class DataFactory():
         return df;
 
     
-    #---------------------------------------------------------------------------
-    # getData
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# getData
+#------------------------------------------------------------------------
     def getData(self, shuffling=False, 
                 timestamp_start='2022-06-29 05:00:00', 
                 timestamp_stop='2022-07-01 23:59:59', 
-                type="predict"):
+                type="predict",
+                il=1):
         
         txdt_b  = False;
         df      = pd.DataFrame(columns = self.df_parmX);
@@ -856,6 +862,7 @@ class DataFactory():
         size_train = 0;
         size_valid = 0;
         size_test  = 0;
+        size       = 0;
         
         try:
            
@@ -896,10 +903,13 @@ class DataFactory():
                 
                 # treninkova a validacni mnozina    
                 df = df[(df["timestamp"] > timestamp_start) & (df["timestamp"] <= timestamp_stop)];
+                
                 if len(df) <= 1:
                     self.logger.error("Data pro trenink maji nulovou velikost - exit(1)");
                     os._exit(1);
-                
+
+                if self.debug_mode is True and il > 1:
+                    df = df.iloc[::il, :];
             
                 df["index"] = pd.Index(range(0, len(df), 1));
                 df.set_index("index", inplace=True);
@@ -910,11 +920,11 @@ class DataFactory():
                 size_test  = math.floor(size * 0 / 12);
 
             # nacti data pro predict
-            self.logger.info("Data pro predikci....");
+            self.logger.debug("Data pro predikci....");
             if self.debug_mode is True:
                 df_test = self.opc.opcCollectorGetDebugData(self.df_parmX);
             else:
-                self.logger.info("Data pro predikci getPlcData....");
+                self.logger.debug("Data pro predikci getPlcData....");
                 df_test = self.opc.opcCollectorGetPlcData(self.df_parmX);
                 
             if df_test is None:
@@ -938,6 +948,8 @@ class DataFactory():
                                                              shuffling=shuffling 
                                                         );
             
+            self.df_recc = size;
+            self.logger.info("Data pro trenink nactena, pocet vet: %d" %(size));
 
             return self.DataTrainDim(self.DataTrainDim.DataTrain);
 
@@ -945,13 +957,13 @@ class DataFactory():
             traceback.print_exc();
             self.logger.error(traceback.print_exc());
             
-    #-----------------------------------------------------------------------
-    # saveDataToPLC  - result
-    # index = pd.RangeIndex(start=10, stop=30, step=2, name="data")
-    #
-    #         return True - nacti dalsi porci dat pro predict
-    #         return False - nenacitej dalsi porci dat pro predict.
-    #-----------------------------------------------------------------------
+#-----------------------------------------------------------------------
+# saveDataToPLC  - result
+# index = pd.RangeIndex(start=10, stop=30, step=2, name="data")
+#
+#         return True - nacti dalsi porci dat pro predict
+#         return False - nenacitej dalsi porci dat pro predict.
+#-----------------------------------------------------------------------
     def saveDataToPLC(self, threads_result, timestamp_start, thread_name, typ, saveresult=True):
 
         
@@ -987,17 +999,17 @@ class DataFactory():
             append = False;
         
         if append:             
-            self.logger.info(f'Soubor {filename} existuje - append');
+            self.logger.debug(f'Soubor {filename} existuje - append');
             df_plc.to_csv(filename, mode = "a", index=False, header=False, float_format='%.5f');
         else:
-            self.logger.info(f'Soubor {filename} neexistuje - insert');
+            self.logger.debug(f'Soubor {filename} neexistuje - insert');
             df_plc.to_csv(filename, mode = "w", index=False, header=True, float_format='%.5f');
 
         # data do PLC - debug mode -> disable...
         if self.debug_mode is False:
             result_opc = self.opc.opcCollectorSendToPLC(df_plc=df_plc );
             if result_opc:
-                self.logger.warning("Data do PLC byla zapsana !!!!!!");
+                self.logger.info("Data do PLC byla zapsana !!!!!!");
             else:    
                 self.logger.error("Data do PLC nebyla zapsana !!!!!!");
         
@@ -1020,9 +1032,9 @@ class DataFactory():
         return True; #nacti novou porci dat    
         
      
-    #-----------------------------------------------------------------------
-    # formatToPLC  - result
-    #-----------------------------------------------------------------------
+#-----------------------------------------------------------------------
+# formatToPLC  - result
+#-----------------------------------------------------------------------
     def formatToPLC(self, df_result, col_names_y):
         #curent timestamp UTC
         current_time = time.time()
@@ -1037,7 +1049,7 @@ class DataFactory():
         for col in col_names_y:
             if "dev" in col:
                 mmean = self.myIntFormat(df_result[col].mean() *10000);   #prevod pro PLC (viz dokument Teplotni Kompenzace AI)
-                l_plc.append(mmean);                                      #  10 = 0.001 atd...
+                l_plc.append(mmean);                                  #  10 = 0.001 atd...
                 l_plc_col.append(col+"mean");
                 
         return (pd.DataFrame([l_plc], columns=[l_plc_col]));
@@ -1045,10 +1057,10 @@ class DataFactory():
             
         
         
-    #-----------------------------------------------------------------------
-    # saveDataResult  - result
-    # index = pd.RangeIndex(start=10, stop=30, step=2, name="data")
-    #-----------------------------------------------------------------------
+#-----------------------------------------------------------------------
+# saveDataResult  - result
+# index = pd.RangeIndex(start=10, stop=30, step=2, name="data")
+#-----------------------------------------------------------------------
     def saveDataResult(self, timestamp_start, df_result,  model, typ, saveresult=True):
 
         filename = "./result/predicted_"+str(self.current_date)[0:10]+"_"+model+".csv"
@@ -1152,9 +1164,9 @@ class DataFactory():
         
         return;    
 
-    #-----------------------------------------------------------------------
-    # saveParmsMAE - zapise hodnoty MAE v zavislosti na pouzitych parametrech
-    #-----------------------------------------------------------------------
+#-----------------------------------------------------------------------
+# saveParmsMAE - zapise hodnoty MAE v zavislosti na pouzitych parametrech
+#-----------------------------------------------------------------------
     def saveParmsMAE(self, df,  model):
 
         filename = "./result/parms_mae_"+str(self.current_date)[0:10]+"_"+model+".csv"
@@ -1186,6 +1198,10 @@ class DataFactory():
                     res = self.myFloatFormat(df[col].abs().mean())
                     local_parms.append(float(res));
 
+        local_header.append("df_recc");
+        local_parms.append(int(self.df_recc));
+                    
+
         local_parms = self.parms + local_parms;
         local_header = self.header + local_header;
         
@@ -1198,17 +1214,17 @@ class DataFactory():
             append = False;
         
         if append:             
-            self.logger.info(f'Soubor {filename} existuje - append');
+            self.logger.debug(f'Soubor {filename} existuje - append');
             df_ae.to_csv(filename, mode = "a", index=True, header=False, float_format='%.5f');
         else:
-            self.logger.info(f'Soubor {filename} neexistuje - insert');
+            self.logger.debug(f'Soubor {filename} neexistuje - insert');
             df_ae.to_csv(filename, mode = "w", index=True, header=True, float_format='%.5f');
             
         return;    
         
-    #-----------------------------------------------------------------------
-    # getParmsFromFile - nacte parametry z ./parms/parms.txt
-    #-----------------------------------------------------------------------
+#-----------------------------------------------------------------------
+# getParmsFromFile - nacte parametry z ./parms/parms.txt
+#-----------------------------------------------------------------------
     def getParmsFromFile(self):
         # otevreno v read mode
         
@@ -1242,14 +1258,14 @@ class DataFactory():
             
                 
         except:
-            self.logger.info("Soubor parametru "+ parmfile + " nenalezen!");                
+            self.logger.error("Soubor parametru "+ parmfile + " nenalezen!");                
             self.logger.info("Parametry pro trenink site budou nastaveny implicitne v programu");                 
         
         return();  
     
-    #---------------------------------------------------------------------------
-    # DataFactory
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# DataFactory
+#------------------------------------------------------------------------
     def prepareParmsPredict(self):
         
         i = 0;
@@ -1257,30 +1273,30 @@ class DataFactory():
             df_parmX_predict[i] = self.df_parmX[i]+"_predict";
         i = 0;
              
-    #-----------------------------------------------------------------------
-    # toTensorLSTM(self, dataset, window = 64):
-    #-----------------------------------------------------------------------
-    # Pracujeme - li s rekurentnimi sitemi (LSTM GRU...), pak 
-    # musíme vygenerovat dataset ve specifickém formátu.
-    # Vystupem je 3D tenzor ve forme 'window' casovych kroku.
-    #  
-    # Jakmile jsou data vytvořena ve formě 'window' časových kroků, 
-    # jsou nasledne prevedena do pole NumPy a reshapovana na 
-    # pole 3D X_dataset.
-    #
-    # Funkce take vyrobi pole y_dataset, ktere muze byt pouzito pro 
-    # simulaci modelu vstupnich dat, pokud tato data nejsou k dispozici.  
-    # y_dataset predstavuje "window" časových rámců krat prvni prvek casoveho 
-    # ramce pole X_dataset
-    #
-    # funkce vraci: X_dataset - 3D tenzor dat pro uceni site
-    #               y_dataset - vektor vstupnich dat (model)
-    #               dataset_cols - pocet sloupcu v datove sade. 
-    #
-    # poznamka: na konec tenzoru se pripoji libovolne 'okno' aby se velikost
-    #           o toto okno zvetsila - vyresi se tim chybejici okno pri predikci
-    #           
-    #-----------------------------------------------------------------------
+#-----------------------------------------------------------------------
+# toTensorLSTM(self, dataset, window = 64):
+#-----------------------------------------------------------------------
+# Pracujeme - li s rekurentnimi sitemi (LSTM GRU...), pak 
+# musíme vygenerovat dataset ve specifickém formátu.
+# Vystupem je 3D tenzor ve forme 'window' casovych kroku.
+#  
+# Jakmile jsou data vytvořena ve formě 'window' časových kroků, 
+# jsou nasledne prevedena do pole NumPy a reshapovana na 
+# pole 3D X_dataset.
+#
+# Funkce take vyrobi pole y_dataset, ktere muze byt pouzito pro 
+# simulaci modelu vstupnich dat, pokud tato data nejsou k dispozici.  
+# y_dataset predstavuje "window" časových rámců krat prvni prvek casoveho 
+# ramce pole X_dataset
+#
+# funkce vraci: X_dataset - 3D tenzor dat pro uceni site
+#               y_dataset - vektor vstupnich dat (model)
+#               dataset_cols - pocet sloupcu v datove sade. 
+#
+# poznamka: na konec tenzoru se pripoji libovolne 'okno' aby se velikost
+#           o toto okno zvetsila - vyresi se tim chybejici okno pri predikci
+#           
+#-----------------------------------------------------------------------
     
     def toTensorLSTM(dataset, window):
         
@@ -1311,20 +1327,20 @@ class DataFactory():
         
         return NeuronLayerLSTM.DataSet(X_dataset, y_dataset, dataset_cols);
 
-    #-----------------------------------------------------------------------
-    # fromTensorLSTM(self, dataset, window = 64):
-    #-----------------------------------------------------------------------
-    # Poskladej vysledek vzdy z posledniho behu treninkove sady
-    # a vrat vysledek o rozmeru [0: (dataset.shape[0] - 1)] krat [0 : dataset.shape[2]]
-    # priklad: ma li tenzor rozmer 100 x 64 x 16, pak vrat vysledek [0:100-1], 64, [0,16-1]
-    # funkce vraci: y_result - 2D array vysledku predikce
-    #-----------------------------------------------------------------------
+#-----------------------------------------------------------------------
+# fromTensorLSTM(self, dataset, window = 64):
+#-----------------------------------------------------------------------
+# Poskladej vysledek vzdy z posledniho behu treninkove sady
+# a vrat vysledek o rozmeru [0: (dataset.shape[0] - 1)] krat [0 : dataset.shape[2]]
+# priklad: ma li tenzor rozmer 100 x 64 x 16, pak vrat vysledek [0:100-1], 64, [0,16-1]
+# funkce vraci: y_result - 2D array vysledku predikce
+#-----------------------------------------------------------------------
     def fromTensorLSTM(dataset):
         return(dataset[0 : (dataset.shape[0]),  (dataset.shape[1] - 1) , 0 : dataset.shape[2]]);
         
-    #---------------------------------------------------------------------------
-    # DataFactory getter metody
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# DataFactory getter metody
+#------------------------------------------------------------------------
     def getDf_parmx(self):
         return self.df_parmx;
     
@@ -1358,31 +1374,31 @@ class DataFactory():
     def setCurrentDate(self, val):
         self.current_date = val;
         
-    #---------------------------------------------------------------------------
-    # isPing         
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# isPing         
+#------------------------------------------------------------------------
     def isPing(self):
         is_ping = self.opc.isPing();
         return(is_ping);
     
-    #---------------------------------------------------------------------------
-    # myFloatFormat         
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# myFloatFormat         
+#------------------------------------------------------------------------
     def myFloatFormat(self,x):
         return ('%.6f' % x).rstrip('0').rstrip('.');
 
-    #---------------------------------------------------------------------------
-    # myIntFormat         
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# myIntFormat         
+#------------------------------------------------------------------------
     def myIntFormat(self, x):
         return ('%.f' % x).rstrip('.');
 
     
 
 
-#---------------------------------------------------------------------------
+#------------------------------------------------------------------------
 # Neuronova Vrstava LSTM
-#---------------------------------------------------------------------------
+#------------------------------------------------------------------------
 class NeuronLayerLSTM():
     #definice datoveho ramce
     
@@ -1407,7 +1423,8 @@ class NeuronLayerLSTM():
                  actf,
                  debug_mode,
                  current_date="",
-                 thread_name=""):
+                 thread_name="",
+                 il=1):
 
         self.logger    = logging.getLogger('root');
         
@@ -1419,6 +1436,7 @@ class NeuronLayerLSTM():
         self.batch = batch;
         self.txdat1 = txdat1;
         self.txdat2 = txdat2;
+        self.il     = il;
         
         self.df = pd.DataFrame()
         self.df_out = pd.DataFrame()
@@ -1438,9 +1456,9 @@ class NeuronLayerLSTM():
         self.neural_model   = None;
         
 
-    #---------------------------------------------------------------------------
-    # Neuronova Vrstava LSTM
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# Neuronova Vrstava LSTM
+#------------------------------------------------------------------------
     def neuralNetworkLSTMtrain(self, DataTrain, thread_name):
         window_X = self.window;
         window_Y =  1;
@@ -1514,13 +1532,12 @@ class NeuronLayerLSTM():
             return ();
         
         except Exception as ex:
-            traceback.print_exc();
-            self.logger.info(traceback.print_exc());
+            self.logger.error(traceback.print_exc());
         
         
-    #---------------------------------------------------------------------------
-    # Neuronova Vrstava LSTM predict 
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# Neuronova Vrstava LSTM predict 
+#------------------------------------------------------------------------
     def neuralNetworkLSTMpredict(self, DataTrain, thread_name):
         
         try:
@@ -1553,13 +1570,9 @@ class NeuronLayerLSTM():
             self.logger.error("          zkuste nejdrive --typ == train !!!");
             self.logger.error(traceback.print_exc());
 
-
-
-
-    #---------------------------------------------------------------------------
-    # neuralNetworkLSTMexec_x 
-    #---------------------------------------------------------------------------
-
+#------------------------------------------------------------------------
+# neuralNetworkLSTMexec_x 
+#------------------------------------------------------------------------
     def neuralNetworkLSTMexec(self, threads_result, threads_cnt):
 
         thread_name = "";
@@ -1573,7 +1586,8 @@ class NeuronLayerLSTM():
             self.data.Data = self.data.getData(shuffling=self.shuffling, 
                                                timestamp_start=self.txdat1, 
                                                timestamp_stop=self.txdat2,
-                                               type=self.typ);
+                                               type=self.typ,
+                                               il=self.il);
 
 
             if self.typ == 'train':
@@ -1606,14 +1620,14 @@ class NeuronLayerLSTM():
             return();
 
         except FileNotFoundError as e:
-            self.logger.info(f"Nenalezen model site, zkuste nejdrive spustit s parametem train !!!");    
+            self.logger.error(f"Nenalezen model site, zkuste nejdrive spustit s parametem train !!!");    
         except Exception as ex:
-            self.logger.info(str(traceback.print_exc()));
+            self.logger.error(traceback.print_exc());
             traceback.print_exc();
             
-    #---------------------------------------------------------------------------
-    # setter - getter
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# setter - getter
+#------------------------------------------------------------------------
     def getModel(self):
         return self.model_;
     
@@ -1647,16 +1661,16 @@ class NeuronLayerLSTM():
     def setCurrentDate(self, val):
         self.current_date = val;
         
-    #---------------------------------------------------------------------------
-    # isPing ????
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# isPing ????
+#------------------------------------------------------------------------
     def isPing(self):
         return self.data.isPing();
 
 
-#---------------------------------------------------------------------------
+#------------------------------------------------------------------------
 # Neuronova Vrstava DENSE
-#---------------------------------------------------------------------------
+#------------------------------------------------------------------------
 class NeuronLayerDENSE():
     #definice datoveho ramce
     
@@ -1680,7 +1694,8 @@ class NeuronLayerDENSE():
                  actf, 
                  debug_mode,
                  current_date="",
-                 thread_name=""):
+                 thread_name="",
+                 il=1):
 
         self.logger    = logging.getLogger('root');
         
@@ -1695,6 +1710,7 @@ class NeuronLayerDENSE():
         self.debug_mode = debug_mode;
         self.current_date=current_date;
         self.thread_name    = thread_name;
+        self.il     = il;
 
         self.df     = pd.DataFrame();
         self.df_out = pd.DataFrame();
@@ -1710,9 +1726,9 @@ class NeuronLayerDENSE():
         self.y_valid_scaler = None;
         self.neural_model   = None;
 
-    #---------------------------------------------------------------------------
-    # smoothGraph - trochu vyhlad graf
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# smoothGraph - trochu vyhlad graf
+#------------------------------------------------------------------------
     def smoothGraph(self, points, factor=0.9):
         smoothed_points = [];
         
@@ -1725,9 +1741,9 @@ class NeuronLayerDENSE():
                 
         return smoothed_points;        
         
-    #---------------------------------------------------------------------------
-    # Neuronova Vrstava DENSE 
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# Neuronova Vrstava DENSE 
+#------------------------------------------------------------------------
     def neuralNetworkDENSEtrain(self, DataTrain, thread_name):
 
         try:
@@ -1797,21 +1813,20 @@ class NeuronLayerDENSE():
             traceback.print_exc();
             self.logger.error(traceback.print_exc());
         
-    #---------------------------------------------------------------------------
-    # Neuronova Vrstava DENSE predict
-    # Zapis scaler 
-    #   df = pd.DataFrame({'A':[1,2,3,7,9,15,16,1,5,6,2,4,8,9],
-    #                      'B':[15,12,10,11,8,14,17,20,4,12,4,5,17,19],
-    #                      'C':['Y','Y','Y','Y','N','N','N','Y','N','Y','N','N','Y','Y']})
-    #   df[['A','B']] = min_max_scaler.fit_transform(df[['A','B']])  
-    #   pickle.dump(min_max_scaler, open("scaler.pkl", 'wb'))
-    # Nacti scaler
-    #   scalerObj = pickle.load(open("scaler.pkl", 'rb'))
-    #   df_test = pd.DataFrame({'A':[25,67,24,76,23],'B':[2,54,22,75,19]})
-    #   df_test[['A','B']] = scalerObj.transform(df_test[['A','B']])
-    #
-    #
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# Neuronova Vrstava DENSE predict
+# Zapis scaler 
+#   df = pd.DataFrame({'A':[1,2,3,7,9,15,16,1,5,6,2,4,8,9],
+#                      'B':[15,12,10,11,8,14,17,20,4,12,4,5,17,19],
+#                      'C':['Y','Y','Y','Y','N','N','N','Y','N','Y','N',
+#                           'N','Y','Y']})
+#  df[['A','B']] = min_max_scaler.fit_transform(df[['A','B']])  
+#   pickle.dump(min_max_scaler, open("scaler.pkl", 'wb'))
+# Nacti scaler
+#   scalerObj = pickle.load(open("scaler.pkl", 'rb'))
+#   df_test = pd.DataFrame({'A':[25,67,24,76,23],'B':[2,54,22,75,19]})
+#   df_test[['A','B']] = scalerObj.transform(df_test[['A','B']])
+#------------------------------------------------------------------------
     def neuralNetworkDENSEpredict(self, DataTrain, thread_name):
         
         #dff = pd.DataFrame();
@@ -1842,9 +1857,9 @@ class NeuronLayerDENSE():
             self.logger.warning("          zkuste nejdrive --typ == train !!!");
             self.logger.error(traceback.print_exc());
 
-    #---------------------------------------------------------------------------
-    # neuralNetworkDENSEexec_x 
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# neuralNetworkDENSEexec_x 
+#------------------------------------------------------------------------
     def neuralNetworkDENSEexec(self, threads_result, threads_cnt):
 
         thread_name = "";
@@ -1857,8 +1872,9 @@ class NeuronLayerDENSE():
             self.data.Data = self.data.getData(shuffling=self.shuffling, 
                                                timestamp_start=self.txdat1, 
                                                timestamp_stop=self.txdat2,
-                                               type=self.typ);
-            
+                                               type=self.typ,
+                                               il=self.il);
+
             if self.typ == 'train':
                 self.logger.info("Start: "+ thread_name+" vcetne treninku, model bude zapsan");
                 self.neuralNetworkDENSEtrain(self.data.DataTrainDim.DataTrain, thread_name);
@@ -1883,7 +1899,7 @@ class NeuronLayerDENSE():
                 pass;
             
             stopTime = datetime.now();
-            self.logger.debug( thread_name+ ": cas vypoctu[s] " + str(stopTime - startTime) + "");
+            self.logger.info( thread_name+ ": cas vypoctu[s] " + str(stopTime - startTime) + "");
 
             return();
 
@@ -1891,12 +1907,11 @@ class NeuronLayerDENSE():
             self.logger.error(f"Nenalezen model site, zkuste nejdrive spustit s parametem train !!!");    
         except Exception as ex:
             self.logger.error(traceback.print_exc());
-            traceback.print_exc();
             
 
-    #---------------------------------------------------------------------------
-    # setter - getter
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# setter - getter
+#------------------------------------------------------------------------
     def getModel(self):
         return self.model_;
     
@@ -1930,9 +1945,9 @@ class NeuronLayerDENSE():
     def setCurrentDate(self, val):
         self.current_date = val;
         
-    #---------------------------------------------------------------------------
-    # isPing ????
-    #---------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# isPing ????
+#------------------------------------------------------------------------
     def isPing(self):
         return self.data.isPing();
 
@@ -1955,10 +1970,11 @@ class NeuroDaemon():
                  window, 
                  debug_mode,
                  current_date,
-                 max_threads
+                 max_threads,
+                 il
             ):
 
-        self.logger    = logging.getLogger('root');
+        self.logger    = logging.getLogger('ai-daemon');
         
         
         self.pidf           = pidf; 
@@ -1975,6 +1991,7 @@ class NeuroDaemon():
         self.debug_mode     = debug_mode;
         self.current_date   = current_date;
         self.typ            = "train";
+        self.il             = il;
         
         self.train_counter  = 0;
         self.data           = None;
@@ -2075,7 +2092,8 @@ class NeuroDaemon():
                                   actf           = self.actf, 
                                   debug_mode     = self.debug_mode,
                                   current_date   = self.current_date,
-                                  thread_name    = thread_name
+                                  thread_name    = thread_name,
+                                  il             = self.il
                             );
                             
         neural.setData(self.data);
@@ -2206,7 +2224,8 @@ class NeuroDaemon():
                                   actf           = self.actf, 
                                   debug_mode     = self.debug_mode,
                                   current_date   = self.current_date,
-                                  thread_name    = thread_name
+                                  thread_name    = thread_name,
+                                  il             = self.il
                             );
         
         neural.setData(self.data);
@@ -2278,9 +2297,9 @@ class NeuroDaemon():
 
             if plc_isRunning:
                 if neural.getTyp() == "train":
-                    self.logger.debug("PLC ON:"+ current_date + " rezim train, pocet aktivnich threadu: " + str(threads_cnt + 1)+"");
+                    self.logger.info("PLC ON:"+ current_date + " rezim train, pocet aktivnich threadu: " + str(threads_cnt + 1)+"");
                 else:
-                    self.logger.debug("PLC ON:"+ current_date + " rezim predict, pocet aktivnich threadu: " + str(threads_cnt +1)+"");
+                    self.logger.info("PLC ON:"+ current_date + " rezim predict, pocet aktivnich threadu: " + str(threads_cnt +1)+"");
                     
                 neural.neuralNetworkDENSEexec(threads_result, threads_cnt);
                 neural.setTyp("predict");
@@ -2332,22 +2351,12 @@ class NeuroDaemon():
             
             self.data.setParms(parms);
             
-            #nacti data pro trenink a predict
-            #self.data.Data = self.data.getData(shuffling=self.shuffling, 
-            #                         timestamp_start=self.txdat1, 
-            #                         timestamp_stop=self.txdat2,
-            #                         type=self.typ);
-            
-            #if self.data.getDfTrainData().empty and "predict" in self.typ:
-            #    self.logger.info("Data pro predict, nejsou k dispozici");
-            #    return(0);
-
         except Exception as ex:
             traceback.print_exc();
             self.logger.error(traceback.print_exc());
             
         
-        self.logger.info("Thread executor start, pocet threadu :"+str(threads_max_cnt)+".....");
+        self.logger.info("Thread executor start, pocet threadu :("+str(threads_max_cnt)+")");
         try:
             if "DENSE" in self.model_:
                 # thread names
@@ -2367,25 +2376,24 @@ class NeuroDaemon():
                 executor = ThreadPoolExecutor(max_workers = threads_max_cnt);
                 futures = [executor.submit(self.runDaemonLSTM, threads_result, threads_cnt ) for threads_cnt in range(threads_max_cnt)];
         except Exception as exc:
-                traceback.print_exc();
                 self.logger.error(traceback.print_exc());
                 
-    #------------------------------------------------------------------------
-    # info daemon
-    #------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# info daemon
+#------------------------------------------------------------------------
     def info(self):
         self.logger.info("daemon pro sledovani a kompenzaci teplotnich zmen stroje");
         return;
-    #------------------------------------------------------------------------
-    # daemonize...
-    #    do the UNIX double-fork magic, see Stevens' "Advanced
-    #    Programming in the UNIX Environment" for details (ISBN 0201563177)
-    #    http://www.erlenstar.demon.co.uk/unix/faq_2.html#SEC16
-    #
-    #------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# daemonize...
+#    do the UNIX double-fork magic, see Stevens' "Advanced
+#    Programming in the UNIX Environment" for details (ISBN 0201563177)
+#    http://www.erlenstar.demon.co.uk/unix/faq_2.html#SEC16
+#
+#------------------------------------------------------------------------
     def daemonize(self):
         
-        self.logger.info("daemonize.....");
+        self.logger.debug("daemonize.....");
 
         handler = self.setLogHandler();
         
@@ -2407,9 +2415,9 @@ class NeuroDaemon():
         
         return(context);
 
-    #------------------------------------------------------------------------
-    # start daemon
-    #------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# start daemon
+#------------------------------------------------------------------------
     def start(self):
         # Kontrola existence pid - daemon run...
         try:                                                                                                                
@@ -2435,9 +2443,9 @@ class NeuroDaemon():
             self.logger.error(traceback.print_exc());
             help(activations);
 
-    #------------------------------------------------------------------------
-    # start daemon
-    #------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# start daemon
+#------------------------------------------------------------------------
     def stop(self):
         try:                                                                                                                
             pf = open(self.pidf,'r');                                                                                    
@@ -2449,7 +2457,7 @@ class NeuroDaemon():
         if pid is None:
             return;                                                                                                             
             message = "pid procesu neexistuje!!!. Daemon patrne nebezi - exit(1)";                                         
-            self.logger.info(message);                                                                       
+            self.logger.error(message);                                                                       
             os._exit(1);
         else:                                                                                                        
             message = "pid procesu %d existuje!!!. Daemon %d stop....";                                         
@@ -2457,9 +2465,9 @@ class NeuroDaemon():
             os._exit(0);
 
             
-    #------------------------------------------------------------------------
-    # getter, setter metody
-    #------------------------------------------------------------------------
+#------------------------------------------------------------------------
+# getter, setter metody
+#------------------------------------------------------------------------
     def getDebug(self):
         return self.debug_mode;
     
@@ -2703,15 +2711,18 @@ def checkActf(actf, activations):
 #------------------------------------------------------------------------
 # main
 # preddefinovane hyperparametry neuronove site
-# ["typ=", "model=", "epochs=", "batch=", "units=", "shuffle=","actf=", "txdat1=","txdat2=", "help="])
+# ["typ=", "model=", "epochs=", "batch=", "units=", "shuffle=","actf=",
+#  "txdat1=","txdat2=", "help="])
 #   parm0  = sys.argv[0];   - nazev programu
 #   typ    = "train";       - typ behu site <train, predict>
 #   model  = "DENSE";       - model site
 #   epochs = 128;           - pocet treninkovych metod
 #   batch  = 128;           - velikost davky
 #   units  = 512;           - pocet neuronu
-#   txdat1 = "";            - timestamp start - vyber dat treninkove a validacni mnoziny
-#   txdat2 = "";            - timestamp stop  - vyber dat treninkove a validacni mnoziny
+#   txdat1 = "";            - timestamp start -
+#                               vyber dat treninkove a validacni mnoziny
+#   txdat2 = "";            - timestamp stop  -
+#                               vyber dat treninkove a validacni mnoziny
 #   shuffling = False;      - promichat nahodne data <True, False>
 #   actf = "tanh";          - aktivacni funkce
 #   pid = 0;
@@ -2759,7 +2770,8 @@ def main(argv):
     startTime      = datetime.now();
     type           = "train";
     debug_mode     = False;
-    max_threads    = 1; 
+    max_threads    = 1;
+    il             = 1; # reccnt
     #debug_mode     = True;
     
         
@@ -2787,8 +2799,7 @@ def main(argv):
     logger = setLogger(logf);
         
     try:
-        logger.info("start...");
-        #logger.info("start...");
+        logger.info("Start...");
 
         #kontrola platne aktivacni funkce        
         if not checkActf(actf, activations):
@@ -2805,7 +2816,7 @@ def main(argv):
         args = [];
         try:
             opts, args = getopt.getopt(sys.argv[1:],
-                                       "hs:d:p:l:m:e:b:u:a:t1:t2:h:x",
+                                       "hs:d:p:l:m:e:b:u:a:t1:t2:il:h:x",
                                       ["status=",
                                        "debug_mode=", 
                                        "pidfile=", 
@@ -2817,6 +2828,7 @@ def main(argv):
                                        "actf=", 
                                        "txdat1=", 
                                        "txdat2=", 
+                                       "ilcnt=", 
                                        "help="]
                                     );
             
@@ -2924,6 +2936,18 @@ def main(argv):
                         help(activations);
                         sys.exit(1);    
 
+            elif opt in ["-il","--ilcnt"]:
+                try:
+                    r = range(0, 128+1);
+                    il = int(arg);
+                    if il not in r:
+                        print("Chyba pri parsovani parametru: parametr 'ilcnt' musi byt cislo typu integer v rozsahu <1, 128>");
+                        help(activations);
+                        sys.exit(1)    
+                except:    
+                    print("Chyba pri parsovani parametru: parametr 'ilcnt' musi byt cislo typu integer v rozsahu <1, 128>");
+                    help(activations);
+                    sys.exit(1)
          
             elif opt in ["-h","--help"]:
                 help(activations);
@@ -2934,9 +2958,9 @@ def main(argv):
             sys.exit(1);
             
             
-        #-----------------------------------------------------------------------------
-        #obsluha demona
-        #-----------------------------------------------------------------------------
+#------------------------------------------------------------------------
+#obsluha demona
+#------------------------------------------------------------------------
         if "start" in status:
             try:
                 
@@ -2954,7 +2978,8 @@ def main(argv):
                                       window         = g_window,
                                       debug_mode     = debug_mode,
                                       current_date   = current_date,
-                                      max_threads    = max_threads
+                                      max_threads    = max_threads,
+                                      il             = il
                                 );
        
                 daemon_.info();
