@@ -1,5 +1,6 @@
 #!/bin/bash
-cd ~/ai/ai-daemon/src
+#cd ~/workspaces/eclipse-python-workspace/ai-daemon/src
+cd /home/plukasik/ai/ai-daemon/src
 
 #----------------------------------------------------------------------
 # ai-ad      Startup skript pro ai-ad demona
@@ -15,20 +16,19 @@ prog=$FILE_PATH"/ai-daemon.py"
 pidfile=${PIDFILE-$FILE_PATH/pid/ai-daemon.pid}
 logfile=${LOGFILE-$FILE_PATH/log/ai-daemon.log}
 
-echo $pidfile
-echo $logfile
-
 RETVAL=0
 STATUS="$1"
-DEBUG_MODE="nodebug"
-MODEL="DENSE"
-EPOCHS="52"
+DEBUG_MODE="debug"
+MODEL="LSTM"
+EPOCHS="57"
 BATCH="128"
-UNITS="75"
+UNITS="91" #DENSE=79    LSTM = 191
 ACTF="elu"
-TXDAT1='2022-02-15 00:00:00'
+TXDAT1="2022-01-01 00:00:01"
+#TXDAT2="2099-23-23 23:59:59"
 TXDAT2=`date +%Y-%m-%d -d "yesterday"`" 23:59:59"
 OPTIONS=""
+ILCNT="6" 
 
 
 #----------------------------------------------------------------------
@@ -55,11 +55,12 @@ start_daemon(){
 	    --units="$UNITS" \
 	    --actf="$ACTF" \
 	    --txdat1="$TXDAT1" \
-	    --txdat2="$TXDAT2"
+	    --txdat2="$TXDAT2" \
+	    --ilcnt="$ILCNT"
     
     conda deactivate
     curr_timestamp=`date "+%Y-%m-%d %H:%M:%S"`
-    echo "Stop ulohy: "$curr_timestamp
+    echo "ai-daemon start: "$curr_timestamp
 
 }
 
@@ -67,6 +68,29 @@ start_daemon(){
 # start
 #----------------------------------------------------------------------
 start() {
+        echo -n $"Starting $prog: as daemon... "
+
+        if [[ -f ${pidfile} ]] ; then
+            pid=$( cat $pidfile  )
+            isrunning=$( ps -elf | grep  $pid | grep $prog | grep -v grep )
+
+            if [[ -n ${isrunning} ]] ; then
+                echo $"$prog already running"
+                return 0
+            fi
+        fi
+	start_daemon
+        RETVAL=$?
+        [ $RETVAL = 0 ]
+        echo
+        return $RETVAL
+}
+
+
+#----------------------------------------------------------------------
+# run 
+#----------------------------------------------------------------------
+run() {
         echo -n $"Starting $prog: "
 
         if [[ -f ${pidfile} ]] ; then
@@ -85,6 +109,7 @@ start() {
         return $RETVAL
 }
 
+
 #----------------------------------------------------------------------
 # stop  
 #----------------------------------------------------------------------
@@ -94,10 +119,11 @@ stop() {
         isrunning=$( ps -elf | grep $pid | grep $prog | grep -v grep | awk '{print $4}' )
 
         if [[ ${isrunning} -eq ${pid} ]] ; then
-            echo -n $"Stopping $prog: "
+            echo -n $"Stop $prog: "
             kill $pid
+	    rm -f $pidfile 
         else
-            echo -n $"Stopping $prog: "
+            echo -n $"STOP $prog: "
         fi
         RETVAL=$?
     fi
@@ -123,6 +149,9 @@ case "$1" in
   stop)
     stop
     ;;
+  run)
+    run
+    ;;
   status)
     status -p $pidfile $eg_daemon
     RETVAL=$?
@@ -135,7 +164,7 @@ case "$1" in
     reload
     ;;
   *)
-    echo $"Usage: $prog {start|stop|restart|force-reload|reload|status}"
+    echo $"Usage: $prog {start|run|stop|restart|force-reload|reload|status}"
     RETVAL=2
 esac
 
