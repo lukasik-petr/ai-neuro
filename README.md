@@ -1,22 +1,23 @@
 ai-neuro 
 (C) GNU General Public License, 
-pro potreby projektu TM-AI vyrobil Petr Lukasik , 2022 
+made by Petr Lukasik for the TM-AI project, 2022
 ------------------------------------------------------------------------------------------------------ 
- program pro projekt TM-AI v TAJMAC-ZPS,a.s.
- predikce vlivu teploty na presnost obrabeni
- Prerekvizity: linux Debian-11 nebo Ubuntu-20.04,
+ prediction of the effect of temperature on machining accuracy
+
+ Prerequisites: Linux Debian-11.4 or Ubuntu-20.04,
   miniconda3,
   python 3.9,
-  tensorflow 2.8,
+  tensorflow 2.9,
   mathplotlib,
   scikit-learn-intelex,
   pandas,
   numpy,
   keras
 
- Windows se pokud mozno vyhnete. Tak je doporuceno v manualech TensorFlow
- i kdyz si myslim ze by to take fungovalo. Ale proc si delat zbytecne
- starosti...
+ Avoid Windows if possible. This is recommended in the Some manuals.
+ It has been verified and works on Windows as well. However, 
+ it is not possible to transfer the conda environment from 
+ Linux to Windows. It has to be reinstalled.
 
  Pozor pro instalaci je nutno udelat nekolik veci
   1. instalace prostredi miniconda 
