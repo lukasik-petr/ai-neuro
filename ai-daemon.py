@@ -1,8 +1,7 @@
 #!/usr/bin/python3
-
 #------------------------------------------------------------------------
 # ai-daemon
-# (C) GNU General Public 1License,
+# (C) GNU General Public License,
 # pro potreby projektu TM-AI vyrobil Petr Lukasik , 2022 ");
 #------------------------------------------------------------------------
 # program pro projekt TM-AI v TAJMAC-ZPS,a.s.
@@ -17,9 +16,9 @@
 #               numpy,
 #               keras,
 #
-# Windows se pokud mozno vyhnete. Tak je doporuceno v manualech TensorFlow
-# i kdyz si myslim ze by to take fungovalo. Ale proc si delat zbytecne
-# starosti...
+# Windows se pokud mozno vyhnete. Tak je doporuceno v manualech TensorFlow.
+# Nicmene, bylo testovano a funguje. Nelze vsak prenest miniconda applianci
+# z Linuxu na Windows, nutno znovu instalovat.
 #
 # Pozor pro instalaci je nutno udelat nekolik veci
 #  1. instalace prostredi miniconda 
@@ -55,8 +54,12 @@ import time;
 import atexit; 
 import signal; 
 import socket;
-import grp;
-import daemon, daemon.pidfile;
+#import grp;
+try:
+    import daemon, daemon.pidfile;
+except ImportError:
+    daemon = None
+
 import lockfile;
 import random;
 import webbrowser;
@@ -69,6 +72,7 @@ import numpy as np;
 import shutil;
 import matplotlib as mpl;
 import matplotlib.pyplot as plt;
+#mpl.use('Agg');
 import platform;
 import pandas.api.types as ptypes;
 import pickle;
@@ -125,9 +129,15 @@ from opcua.common.ua_utils import data_type_to_variant_type
 
 from subprocess import call;
 from plistlib import InvalidFileException
-from tensorflow.python.eager.function import np_arrays
+try:
+    from tensorflow.python.eager.function import np_arrays
+except ImportError:
+    np_arrays = None
 from pandas.errors import EmptyDataError
-from keras.saving.utils_v1.mode_keys import is_train
+try:
+    from keras.saving.utils_v1.mode_keys import is_train
+except ImportError:
+    is_train = None
 
 #logger
 import logging
@@ -186,7 +196,7 @@ class OPCAgent():
         self.uri1       = self.prefix+self.host1+":"+self.port1;
         self.uri2       = self.prefix+self.host2+":"+self.port2;
         
-        self.plc_timer  = 3 #[s];
+        self.plc_timer  = 10 #[s];
 
 #------------------------------------------------------------------------
 # ping_         
@@ -566,7 +576,7 @@ class OPCAgent():
 
         # zapis dat z OPC pro rozsireni treninkove mnoziny        
         current_day =  datetime.now().strftime("%Y-%m-%d");
-        path_to_df = "./br_data/tm-ai_"+current_day+".csv";
+        path_to_df = "./br_data/getplc/tm-ai_"+current_day+".csv";
         
         
         self.logger.debug("Nacitam "+str(self.batch)+" vzorku dat pro predict - v intervalu: " +str(self.plc_timer)+ "[s]");
@@ -795,12 +805,13 @@ class DataFactory():
             DataTrain_x = self.DataTrain;
             DataTrain_x.train = pd.DataFrame(df[0 : size_train][self.df_parmX]);
             DataTrain_x.valid = pd.DataFrame(df[size_train+1 : size_train + size_valid][self.df_parmX]);
-            
+
             if shuffling:
-                DataTrain_x.train = DataTrain_x.train.reset_index(drop=True)
-                DataTrain_x.train = shuffle(DataTrain_x.train)
-                DataTrain_x.train = DataTrain_x.train.reset_index(drop=True)
-                self.logger.debug("--shuffle = True");
+                pass;
+                #DataTrain_x.train = DataTrain_x.train.reset_index(drop=True);
+                #DataTrain_x.train = shuffle(DataTrain_x.train);
+                #DataTrain_x.train = DataTrain_x.train.reset_index(drop=True);
+                #self.logger.debug("--shuffle = True");
             
             DataTrain_x.test  = df_test;
             DataTrain_x.df_parm_x = self.df_parmx;  # data na ose x, pro rovinu X
@@ -820,22 +831,30 @@ class DataFactory():
 #------------------------------------------------------------------------
 # interpolateDF
 # interpoluje data splinem - vyhlazeni schodu na merenych artefaktech
+# u parametru typu 'dev' - odchylky [mikrometr]
 #------------------------------------------------------------------------
-    def interpolateDF(self, df, smoothing_factor, ip_yesno):
+    def interpolateDF(self, df, s_factor, ip_yesno):
+
+        if df is None:
+            return None;
 
         if not ip_yesno:
-            self.logger.debug("interpolace artefaktu nebude provedena ip = False");
+            self.logger.debug("interpolace artefaktu ip = False");
             return df;
         else:
-            self.logger.debug("interpolace artefaktu, smoothing_factor:" + str(smoothing_factor)+"");
+            self.logger.debug("interpolace artefaktu ip = True");
         
         col_names = list(self.df_parmX);
-        x = np.arange(0,len(df));
+        x = np.arange(0, df.shape[0]);
 
         for i in range(len(col_names)):
             if "dev" in col_names[i]:
-                spl =  UnivariateSpline(x, df[col_names[i]], s=smoothing_factor);
+                spl =  UnivariateSpline(x, df[col_names[i]], s=s_factor);
                 df[col_names[i]] = spl(x);
+        #   if "tem" in col_names[i]:
+        #       print(">>>>>>>>>>", col_names[i]);
+        #       spl =  UnivariateSpline(x, df[col_names[i]], s=s_factor / 10);
+        #       df[col_names[i]] = spl(x);
 
         return df;
 
@@ -849,14 +868,18 @@ class DataFactory():
                 type            = "predict",
                 ilcnt           = 1):
         
-        txdt_b  = False;
-        df      = pd.DataFrame(columns = self.df_parmX);
-        df_test = pd.DataFrame(columns = self.df_parmx);
+        txdt_b      = False;
+        df          = pd.DataFrame(columns = self.df_parmX);
+        df_test     = pd.DataFrame(columns = self.df_parmx);
         
-        size_train = 0;
-        size_valid = 0;
-        size_test  = 0;
-        size       = 0;
+        size_train  = 0;
+        size_valid  = 0;
+        size_test   = 0;
+        size        = 0;
+        
+        ip_yesno    = False;
+        s_factor    = 0.5   #  0.5 pro periodu 1[s]
+                            #  0.01 pro periodu 60[s]
         
         try:
            
@@ -865,8 +888,11 @@ class DataFactory():
             #----------------------------------------------------------------------------- 
             # Data pro trenink - if type == "train"
             #----------------------------------------------------------------------------- 
-            if "train" in type: 
-                files = os.path.join("./br_data", "tm-ai_2022*.csv");
+            if "train" in type:
+                if os.name == "nt":
+                    files = os.path.join(Path("./br_data"), "tm-ai_2022*.csv");
+                else:
+                    files = os.path.join("./br_data", "tm-ai_2022*.csv");
                 # list souboru pro join
                 joined_list = glob.glob(files);
             
@@ -892,7 +918,7 @@ class DataFactory():
                 # bordel pri domluve nazvoslovi...            
                 df.columns = df.columns.str.lower();
                 # interpoluj celou mnozinu data  
-                df = self.interpolateDF(df, 0.01, False);            
+                df = self.interpolateDF(df=df, s_factor=s_factor, ip_yesno=ip_yesno);
             
                 # vyber dat dle timestampu
                 df["timestamp"] = pd.to_datetime(df["datetime"].str.slice(0, 18));
@@ -933,10 +959,11 @@ class DataFactory():
                 
             if df_test is None:
                 self.logger.error("Nebyla nactena zadna data pro predikci");
-                
             elif len(df_test) == 0:
                 self.logger.error("Patrne nebezi nektery OPC server  ");
-                    
+            else:    
+                df_test = self.interpolateDF(df=df_test, s_factor=s_factor, ip_yesno=ip_yesno);
+                
             if self.df_parmx == None or self.df_parmX == None:
                 pass;
             else:
@@ -963,7 +990,7 @@ class DataFactory():
 #         return True - nacti dalsi porci dat pro predict
 #         return False - nenacitej dalsi porci dat pro predict.
 #-----------------------------------------------------------------------
-    def saveDataToPLC(self, threads_result, timestamp_start, thread_name, typ, saveresult=True):
+    def saveDataToPLC(self, threads_result, timestamp_start, thread_name,typ,  model, units, epochs, saveresult=True):
 
         
         thread_name = thread_name[0 : len(thread_name) - 1].replace("_","");
@@ -1008,9 +1035,9 @@ class DataFactory():
         if self.debug_mode is False:
             result_opc = self.opc.opcCollectorSendToPLC(df_plc=df_plc );
             if result_opc:
-                self.logger.debug("Data do PLC byla zapsana !!!!!!");
+                self.logger.debug("Data do PLC byla zapsana.");
             else:    
-                self.logger.error("Data do PLC nebyla zapsana !!!!!!");
+                self.logger.error("Data do PLC nebyla zapsana.");
         
         # data ke zkoumani zapisujeme v pripade behu typu "train" a zaroven v debug modu
         if "train" in typ and self.debug_mode is True:
@@ -1019,10 +1046,10 @@ class DataFactory():
             saveresult=True;
             
         if saveresult:
-            self.logger.debug("Vystupni soubor " + filename + " vznikne.");
-            self.saveDataResult(timestamp_start, df_result, thread_name , typ, saveresult);
+            self.logger.debug(filename + " vznikne.");
+            self.saveDataResult(timestamp_start, df_result, thread_name , model, units, epochs, saveresult);
         else:
-            self.logger.debug("Vystupni soubor " + filename + " nevznikne !!!, saveresult = " +str(saveresult) +"");
+            self.logger.debug(filename + " nevznikne !!!, saveresult = " +str(saveresult) +"");
         
         #vynuluj 
         for result in threads_result:
@@ -1060,9 +1087,9 @@ class DataFactory():
 # saveDataResult  - result
 # index = pd.RangeIndex(start=10, stop=30, step=2, name="data")
 #-----------------------------------------------------------------------
-    def saveDataResult(self, timestamp_start, df_result,  model, typ, saveresult=True):
+    def saveDataResult(self, timestamp_start, df_result,  model, typ, units, epochs, saveresult=True):
 
-        filename = "./result/predicted_"+str(self.current_date)[0:10]+"_"+model+".csv"
+        filename = "./result/res_"+str(self.current_date)[0:10]+"_"+model+"_"+str(units)+ "_"+str(epochs)+ ".csv"
         
         try:
             col_names_y = list(self.DataTrain.df_parm_y);
@@ -1101,29 +1128,19 @@ class DataFactory():
             
             df_result.drop(col_names_drop, inplace=True, axis=1);
             df_result  = pd.DataFrame(np.array(df_result), columns =col_names_predict);
-            
+
             df_result2 = pd.DataFrame();
             df_result2 = pd.DataFrame(self.DataTrain.test);
+            df_result2 = df_result2.iloc[ : df_result.shape[0], :];
 
             #merge1 - left inner join
             df_result  = pd.concat([df_result.reset_index(drop=True),
                                     df_result2.reset_index(drop=True)],
                                     axis=1);
-            
-            #df_result.to_csv("a.csv");
-            # U gru se na posledni vete vyskytuje NaN
-            for col in col_names_dev:
-                col = col+"_predict";
-                df_result[col] = df_result[col].fillna(0);
-
             # Absolute Error
             for col in col_names_dev:
                 ae = df_result[col].astype(float) - df_result[col+"_predict"].astype(float);
                 df_result[col+"_ae"] = ae;
-            # Mean Squared Error
-            for col in col_names_dev:
-                mse = mean_squared_error(df_result[col].astype(float),df_result[col+"_predict"].astype(float));
-                df_result[col+"_mse"] = mse;
                 
             list_cols     = list({"idx"}); 
             list_cols_mean = list({"idx"}); 
@@ -1134,8 +1151,7 @@ class DataFactory():
                     list_cols_mean.append(col+"_predict_avg");
 
             
-            # MAE mean cols
-            # MAE mean cols
+            # AE absolute error
             for col in col_names_dev:
                 ae = (df_result[col].astype(float) - df_result[col+"_predict"].astype(float));
                 df_result[col+"_ae"] = ae;
@@ -1147,16 +1163,15 @@ class DataFactory():
                 append = False;
 
             df_result = self.interpolateDF(df_result, 0.01, False);            
-                
         
             if append:             
-                self.logger.debug(f"Soubor {filename} existuje - append: " + str(len(df_result))+" bajtu...");
+                self.logger.debug(f"Soubor {filename} existuje - append: " + str(len(df_result))+" vet...");
                 df_result.to_csv(filename, mode = "a", index=True, header=False, float_format='%.5f');
             else:
-                self.logger.debug(f"Soubor {filename} neexistuje - insert: " + str(len(df_result))+" bajtu...");
+                self.logger.debug(f"Soubor {filename} neexistuje - insert: " + str(len(df_result))+" vet...");
                 df_result.to_csv(filename, mode = "w", index=True, header=True, float_format='%.5f');
                 
-            self.saveParmsMAE(df_result, model)    
+            self.saveParmsMAE(df_result, model, typ, units, epochs)    
 
         except Exception as ex:
             traceback.print_exc();
@@ -1166,10 +1181,9 @@ class DataFactory():
 #-----------------------------------------------------------------------
 # saveParmsMAE - zapise hodnoty MAE v zavislosti na pouzitych parametrech
 #-----------------------------------------------------------------------
-    def saveParmsMAE(self, df,  model):
+    def saveParmsMAE(self, df,  model, typ, units, epochs):
 
-        filename = "./result/parms_mae_"+str(self.current_date)[0:10]+"_"+model+".csv"
-        
+        filename = "./result/mae_"+str(self.current_date)[0:10]+"_"+model+"_"+str(units)+"_"+str(epochs)+".csv"
         
         local_parms = [];   
         local_header = [];     
@@ -1341,6 +1355,7 @@ class NeuronLayerLSTM():
                  txdat1, 
                  txdat2, 
                  units, 
+                 layers,
                  shuffling, 
                  actf,
                  debug_mode,
@@ -1349,6 +1364,7 @@ class NeuronLayerLSTM():
                  ilcnt = 1):
 
         self.logger    = logging.getLogger("ai");
+
         
         
         self.path_to_result = path_to_result; 
@@ -1365,6 +1381,7 @@ class NeuronLayerLSTM():
         self.graph  = None;
         self.data   = None;
         self.units  = units;
+        self.layers       = layers;
         self.shuffling    = shuffling;
         self.actf         = actf;
         self.debug_mode   = debug_mode;
@@ -1375,13 +1392,16 @@ class NeuronLayerLSTM():
         self.x_valid_scaler = None;
         self.y_valid_scaler = None;
         self.neural_model   = None;
-        #okno pro LSTM
-        self.window = 16;
+
         
-        
+        #parametry window-size
+        self.window         = 12;
+        #parametry time-observe...
+        self.n_in           = 2;
+        self.n_out          = 2;
 
 #-----------------------------------------------------------------------
-# toTensorLSTM(self, dataset, window = 64):
+# toTensorLSTM(self, dataset, window = 16):
 #-----------------------------------------------------------------------
 # Pracujeme - li s rekurentnimi sitemi (LSTM GRU...), pak 
 # musíme vygenerovat dataset ve specifickém formátu.
@@ -1435,51 +1455,187 @@ class NeuronLayerLSTM():
         return NeuronLayerLSTM.DataSet(X_dataset, y_dataset, dataset_cols);
 
 #-----------------------------------------------------------------------
-# fromTensorLSTM(self, dataset, window = 64):
-#-----------------------------------------------------------------------
-# Poskladej vysledek vzdy z posledniho behu treninkove sady
-# a vrat vysledek o rozmeru [0: (dataset.shape[0] - 1)] krat [0 : dataset.shape[2]]
-# priklad: ma li tenzor rozmer 100 x 64 x 16, pak vrat vysledek [0:100-1], 64, [0,16-1]
-# funkce vraci: y_result - 2D array vysledku predikce
-#-----------------------------------------------------------------------
-
-    def fromTensorLSTM(self, dataset):
-        return(dataset[0 : dataset.shape[0],  dataset.shape[0] , 0 : dataset.shape[2]]);
-
-#-----------------------------------------------------------------------
 # fromTensorLSTMMean(self, dataset, window = 64):
 #-----------------------------------------------------------------------
 # Udelej mean nad window
 # funkce vraci: y_result - 2D array vysledku predikce
+# zrus 
 #-----------------------------------------------------------------------
     def fromTensorLSTMMean(self, dataset, dropNaN=True):
         df = pd.DataFrame(np.mean(dataset, axis=1));
-        
-        len1 = df.shape[0];
-        # dropni NaN....
-        if dropNaN:
-            df.dropna(inplace=True);
-        len2 = df.shape[0];
-        n = len1 - self.batch;
-        if n > 0:
-            df = df.iloc[0:self.batch, :];
+        df = df.iloc[ : -self.window, :];
         return(df);
 
+#----------------------------------------------------------------------------------------
+#timeSeries
+#  vstup....: casova rada hodnot [list nebo NumPy array]
+#  n_in.....: pocet kroku casoveho zpozdeni pro vstupni hodnoty
+#  n_out....: pocet kroku
+#  dropNaN..: drop NaN ?
+#----------------------------------------------------------------------------------------
+    def toTimeSeries (self, df, n_in=3, n_out=3, dropNaN=True):
+
+        n = n_in + n_out;
+        if n == 0:
+            return df;
+        
+        head   = list(df.head());
+        cols   = list(); 
+        names  = list();
+        n_vars = df.shape [1];
+        
+    # input sequence (t-n, ... t-1)
+        for i in range(n_in , 0, -1):
+            cols.append(df.shift(i));
+            names += [(head[j]+"(t-%d)" % (j+1)) for j in range(n_vars)];
+        
+    # forecast sequence (t, t+1, ... t+n)
+        for i in range(0, n_out):
+            cols.append(df.shift(-i));
+            if i == 0:
+                names += [(head[j]+"(t)" ) for j in range(n_vars)];
+            else:
+                names += [(head[j]+"(t+%d)" % (j+1)) for j in range(n_vars)];
+
+    # concat
+        result = concat(cols , axis=1);
+        result.columns = names;
+    
+    # drop rows with NaN
+        if dropNaN:
+            result.dropna(inplace=True);
+
+        return result;
+
+
+#----------------------------------------------------------------------------------------
+#timeSeries
+#  vstup....: casova rada hodnot [list nebo NumPy array]
+#  n_in.....: pocet kroku casoveho zpozdeni pro vstupni hodnoty
+#  n_out....: pocet kroku
+#  dropNaN..: drop NaN ?
+#  df.groupby(np.arange(len(df.columns))//3, axis=1).mean()
+#----------------------------------------------------------------------------------------
+    def fromTimeSeriesMean (self, array, colnames, n_in=3, n_out=3, dropNaN=True):
+
+        n = n_in + n_out;
+        if n <= 1:
+            df = pd.DataFrame(array);
+            df.columns = colnames;
+            return df;
+        
+        df = pd.DataFrame(array);
+        df_mean = pd.DataFrame();
+        icol = int(df.shape[1]/n);
+        
+        icnt = 0;
+        for col in colnames:
+            df_mean[col] =  df.iloc[:,icnt::icol].mean(axis=1);
+            icnt += 1;
+
+        # zvetsi o ztracene radky na velikost self.batch
+
+        #df_len = df_mean.shape[0];
+        #loss   = self.batch - df_len;
+        #df_loss = df.iloc[(df_len - loss)  : df_len, :];
+        #frames = [df_mean, df_loss];
+        #result = pd.concat(frames);
+        
+        return(df_mean);
+
+#---------------------------------------------------------------------------
+# smoothGraph - trochu vyhlad graf
+#---------------------------------------------------------------------------
+    def smoothGraph(self, points, factor=0.9):
+        smoothed_points = [];
+        
+        for point in points:
+            if smoothed_points:
+                previous = smoothed_points[-1];
+                smoothed_points.append(previous * factor + point * (1 - factor));
+            else:
+                smoothed_points.append(point);
+                
+        return smoothed_points;        
+
+
+#----------------------------------------------------------------------------------------
+#printTrain
+#----------------------------------------------------------------------------------------
+    def printTrainGraph (self, history):
+        #kolik se vynecha o zacatku v grafu?
+        start_point = 0
+        loss_train = history.history['loss'];
+        loss_train = self.smoothGraph(points = loss_train[start_point:], factor = 0.9)
+        loss_val = history.history['val_loss'];
+        loss_val = self.smoothGraph(points = loss_val[start_point:], factor =  0.9)
+        epochs = range(0,len(loss_train));
+        # disable GUI: pokud bezi ve vlaknu bez GUI - vyvola vyjimku
+        plt.switch_backend('agg')
+        plt.clf();
+        plt.plot(epochs, loss_train, label='LOSS treninku');
+        plt.plot(epochs, loss_val,   label='LOSS validace');
+        plt.title('LOSS treninku');
+        plt.xlabel('Pocet epoch');
+        plt.ylabel('LOSS');
+        plt.legend();
+        plt.savefig(self.path_to_result+'/graf_loss.pdf', format='pdf');
+        plt.clf();
+        
+        acc_train =  history.history['acc'];
+        acc_train = self.smoothGraph(points=acc_train[start_point:], factor = 0.9)
+        acc_val = history.history['val_acc'];
+        acc_val = self.smoothGraph(points=acc_val[start_point:], factor = 0.9)
+        epochs = range(0,len(acc_train));
+        # disable GUI: pokud bezi ve vlaknu bez GUI - vyvola vyjimku
+        plt.switch_backend('agg')
+        plt.clf();
+        plt.plot(epochs, acc_train, label='ACC treninku');
+        plt.plot(epochs, acc_val, label='ACC validace');
+        plt.title('ACC treninku');
+        plt.xlabel('Pocet epoch');
+        plt.ylabel('ACC');
+        plt.legend();
+        plt.savefig(self.path_to_result+'/graf_acc.pdf', format='pdf');
+        plt.clf();
+
+
+
 #------------------------------------------------------------------------
-# Neuronova Vrstava LSTM
+# Neuronova Vrstava LSTM lusta
 #------------------------------------------------------------------------
     def neuralNetworkLSTMtrain(self, DataTrain, thread_name):
-        window_X = self.window;
-        window_Y =  1;
+
+        n_in         = self.n_in;
+        n_out        = self.n_out;
+
+        window_X     = self.window;
+        window_Y     =  1;
+
+        model        = self.model_;
+        units        = self.units;
+
+        # ladici parametry
+        layers_count  =  self.layers;        # pocet vrstev v hidden 
+        div           =  1;                  # delitel prvni vrstvy
+        dropout_filter= True;                # Dropout
+        rate          =  0.005;              # a jeho rate....
         
         try:
-            y_train_data = np.array(DataTrain.train[DataTrain.df_parm_y]);
-            x_train_data = np.array(DataTrain.train[DataTrain.df_parm_x]);
-            y_valid_data = np.array(DataTrain.valid[DataTrain.df_parm_y]);
-            x_valid_data = np.array(DataTrain.valid[DataTrain.df_parm_x]);
+            y_train_data = np.array(self.toTimeSeries(DataTrain.train[DataTrain.df_parm_y], n_in, n_out));
+            x_train_data = np.array(self.toTimeSeries(DataTrain.train[DataTrain.df_parm_x], n_in, n_out));
+            y_valid_data = np.array(self.toTimeSeries(DataTrain.valid[DataTrain.df_parm_y], n_in, n_out));
+            x_valid_data = np.array(self.toTimeSeries(DataTrain.valid[DataTrain.df_parm_x], n_in, n_out));
+            
+            if (x_train_data.size == 0 or y_train_data.size == 0):
+                return();
+            
 
-            inp_size = len(x_train_data[0]);
-            out_size = len(y_train_data[0]);
+            inp_size   = x_train_data[0].size;
+            out_size   = y_train_data[0].size;
+            v_inp_size = x_train_data[0].shape[0];
+            v_out_size = y_train_data[0].shape[0];
+
             
         # normalizace dat k uceni a vstupnich treninkovych dat 
             self.x_train_scaler = MinMaxScaler(feature_range=(0, 1))
@@ -1506,37 +1662,109 @@ class NeuronLayerLSTM():
             Y_train.X_dataset = Y_train.X_dataset[0 : X_train.X_dataset.shape[0]];
         #data pro validaci -3D tenzor
             X_valid = self.toTensorLSTM(x_valid_data, window=window_X);
-        #vystupni data pro trenink -3D tenzor
+        #vxsystupni data pro trenink -3D tenzor
             Y_valid = self.toTensorLSTM(y_valid_data, window=window_Y);
             Y_valid.X_dataset = Y_valid.X_dataset[0 : X_valid.X_dataset.shape[0]];
             
-        # neuronova sit
+        #---------------------------------------------------------------------------------------------    
+        # Input layer    
+        #---------------------------------------------------------------------------------------------    
             neural_model = Sequential();
+            initializer  = tf.keras.initializers.RandomUniform(minval=-0.05, maxval=0.05, seed=None)
             neural_model.add(Input(shape=(X_train.X_dataset.shape[1], X_train.cols,)));
-            neural_model.add(layers.Conv1D(64, 2, activation="elu", input_shape=(X_train.X_dataset.shape[1], X_train.cols,)));
-            neural_model.add(LSTM(units = self.units, return_sequences=True));
-            neural_model.add(Dropout(0.2));
-            neural_model.add(layers.Conv1D(64, 2, activation="elu", input_shape=(X_train.X_dataset.shape[1], X_train.cols,)));
-            neural_model.add(LSTM(units = self.units, return_sequences=True));
-        #   neural_model.add(Dropout(0.2));
-        #   neural_model.add(LSTM(units = self.units, return_sequences=True));
-            neural_model.add(layers.Dense(Y_train.cols, activation='relu'));
+
+        #---------------------------------------------------------------------------------------------    
+        # Hidden layer - begin
+        #---------------------------------------------------------------------------------------------    
+            for i in range(layers_count):
+        # umisteni Dropout musi byt zde - dava nejlepsi vysledky.....
+                
+                    
+                if "DENSE" in model:
+                    self.logger.debug(model);
+                    neural_model.add(layers.Dense(units= int(units / div),
+                                              activation=self.actf,
+                                              kernel_initializer=initializer,
+                                              bias_initializer="zeros"
+                    )
+                );
+
+                if "LSTM" in model:
+                    self.logger.debug(model);
+                    neural_model.add(layers.LSTM(units = int(units / div), # self.units / 4
+                                             activation=self.actf,
+                                             recurrent_activation="sigmoid",
+                                             use_bias=True,
+                                             # kernel_initializer=initializer,
+                                             kernel_initializer="glorot_uniform",
+                                             recurrent_initializer="orthogonal",
+                                             bias_initializer="zeros",
+                                             unit_forget_bias=True,
+                                             return_sequences=True
+                    )
+                );
+
+                if "GRU" in model:
+                    self.logger.debug(model);
+                    neural_model.add(layers.GRU(units = int(units / div), # self.units / 4
+                                            activation=self.actf,
+                                            recurrent_activation="sigmoid",
+                                            use_bias=True,
+                                            # kernel_initializer=initializer,
+                                            kernel_initializer="glorot_uniform",
+                                            recurrent_initializer="orthogonal",
+                                            bias_initializer='zeros',
+                                            return_sequences=True
+                    )
+                );
+                    
+                if "CONV1D" in model:
+                    self.logger.debug(model);
+                    neural_model.add(layers.Conv1D(filters=16,       # filters=32 
+                                               kernel_size=2,    # kernel_size=4
+                                               padding="same",
+                                               activation="relu",# relu
+                                               use_bias=True,
+                                               kernel_initializer="glorot_uniform",
+                                               bias_initializer="zeros"
+                    )
+                );
+
+                if dropout_filter:    
+                    neural_model.add(Dropout(rate=rate, noise_shape=None, seed=None));
+
+            #end-for
+
+        #---------------------------------------------------------------------------------------------    
+        # Hidden layer - end
+        #---------------------------------------------------------------------------------------------    
+
+                    
+        #---------------------------------------------------------------------------------------------    
+        # Output layer
+        #---------------------------------------------------------------------------------------------    
+        
+            neural_model.add(layers.Dense(Y_train.cols, activation="relu"));
 
         # definice ztratove funkce a optimalizacniho algoritmu
-            neural_model.compile(loss='mse', optimizer='adam', metrics=['mse', 'acc']);
+            neural_model.compile(loss='mse', optimizer='adam', metrics=["mse", "acc"]);
         # natrenuj neural_model na vstupni dataset
             history = neural_model.fit(X_train.X_dataset, 
                                        Y_train.X_dataset, 
-                                       epochs=self.epochs, 
-                                       batch_size=self.batch, 
-                                       verbose=2, 
-                                       validation_data=(X_valid.X_dataset,
-                                                        Y_valid.X_dataset)
+                                       epochs         =self.epochs, 
+                                       batch_size     =self.batch, 
+                                       verbose        =2,
+                                       shuffle        =self.shuffling,
+                                       validation_data=(X_valid.X_dataset, Y_valid.X_dataset)
                             );
 
-            
         # zapis neural_modelu    
-            neural_model.save("./models/model_"+thread_name+"_"+DataTrain.axis, overwrite=True, include_optimizer=True)
+            neural_model.save("./models/model_"+thread_name+"_"+DataTrain.axis, overwrite=True, include_optimizer=True);
+
+            if self.debug_mode is True:
+                neural_model.summary();
+                self.printTrainGraph(history);
+                
 
         # make predictions for the input data
             self.neural_model = neural_model;
@@ -1551,11 +1779,22 @@ class NeuronLayerLSTM():
 #------------------------------------------------------------------------
     def neuralNetworkLSTMpredict(self, DataTrain, thread_name):
         
+        n_in  = self.n_in;
+        n_out = self.n_out;
+        
         try:
             axis     = DataTrain.axis;  
-            x_test   = np.array(DataTrain.test[DataTrain.df_parm_x]);
-            y_test   = np.array(DataTrain.test[DataTrain.df_parm_y]);
+            #x_test   = np.array(DataTrain.test[DataTrain.df_parm_x]);
+            #y_test   = np.array(DataTrain.test[DataTrain.df_parm_y]);
+            x_test   = np.array(self.toTimeSeries(DataTrain.test[DataTrain.df_parm_x], n_in, n_out));
+            y_test   = np.array(self.toTimeSeries(DataTrain.test[DataTrain.df_parm_y], n_in, n_out));
 
+            if x_test.shape[0] == 0:
+                return(None);
+
+            if y_test.shape[0] == 0:
+                return(None);
+            
             self.x_train_scaler =  pickle.load(open("./temp/x_valid_scaler"+thread_name+".pkl", 'rb'))
             self.y_train_scaler =  pickle.load(open("./temp/y_valid_scaler"+thread_name+".pkl", 'rb'))
             
@@ -1569,6 +1808,10 @@ class NeuronLayerLSTM():
         # reshape 3d na 2d  
             y_result      = self.fromTensorLSTMMean(y_result);
             y_result      = self.y_train_scaler.inverse_transform(y_result);
+
+            x_test   = self.fromTimeSeriesMean(x_test, DataTrain.df_parm_x, n_in, n_out);
+            y_test   = self.fromTimeSeriesMean(y_test, DataTrain.df_parm_y, n_in, n_out);
+            y_result = self.fromTimeSeriesMean(y_result, DataTrain.df_parm_y, n_in, n_out);
         # plot grafu compare...
             #model.summary()
 
@@ -1584,7 +1827,7 @@ class NeuronLayerLSTM():
 #------------------------------------------------------------------------
     def neuralNetworkLSTMexec(self, threads_result, threads_cnt):
 
-        thread_name = "";
+        thread_name = "thread01";
         try:
             
             thread_name = threads_result[threads_cnt][1];
@@ -1601,6 +1844,7 @@ class NeuronLayerLSTM():
 
             if self.typ == 'train':
                 self.logger.debug("Start threadu: %s v TRAIN modu " %(thread_name));
+
                 self.neuralNetworkLSTMtrain(self.data.DataTrainDim.DataTrain, thread_name);
             else:    
                 self.logger.debug("Start threadu: %s v PREDICT modu " %(thread_name));
@@ -1616,10 +1860,14 @@ class NeuronLayerLSTM():
            
             
             self.data.DataResultDim.DataResultX = self.neuralNetworkLSTMpredict(self.data.DataTrainDim.DataTrain, thread_name);
+
+            if self.data.DataResultDim.DataResultX is None:
+                return();
+            
             col_names_y = list(self.data.DataTrain.df_parm_y);
             threads_result[threads_cnt][0]  =  pd.DataFrame(self.data.DataResultDim.DataResultX.y_result, columns = col_names_y);
             
-            if self.data.saveDataToPLC(threads_result, self.txdat1, thread_name, self.typ):
+            if self.data.saveDataToPLC(threads_result, self.txdat1, thread_name, self.typ, self.model_, self.units, self.epochs):
                 pass;
 
             
@@ -1678,418 +1926,6 @@ class NeuronLayerLSTM():
 
 
 #------------------------------------------------------------------------
-# Neuronova Vrstava DENSE
-#------------------------------------------------------------------------
-class NeuronLayerDENSE():
-    #definice datoveho ramce
-    
-    @dataclass
-    class DataSet:
-        X_dataset: object;             #data k uceni
-        y_dataset: object;             #vstupni data
-        cols:      int;                #pocet sloupcu v datove sade
-
-    def __init__(self, 
-                 path_to_result, 
-                 typ, 
-                 model, 
-                 epochs, 
-                 batch, 
-                 txdat1, 
-                 txdat2, 
-                 units, 
-                 shuffling, 
-                 actf, 
-                 debug_mode,
-                 current_date="",
-                 thread_name="",
-                 ilcnt=1):
-
-        self.logger    = logging.getLogger("ai");
-        
-        
-        self.path_to_result = path_to_result; 
-        self.typ    = typ;
-        self.model_ = model;
-        self.epochs = epochs;
-        self.batch  = batch;
-        self.txdat1 = txdat1;
-        self.txdat2 = txdat2;
-        self.debug_mode   = debug_mode;
-        self.current_date = current_date;
-        self.thread_name  = thread_name;
-        self.ilcnt        = ilcnt;
-
-        self.df           = pd.DataFrame();
-        self.df_out       = pd.DataFrame();
-        self.graph        = None;
-        self.units        = units;
-        self.shuffling    = shuffling;
-        self.actf         = actf;
-        self.data         = None;
-        self.x_train_scaler = None;
-        self.y_train_scaler = None;
-        self.x_valid_scaler = None;
-        self.y_valid_scaler = None;
-        self.neural_model   = None;
-
-        #parametry time-observe...
-        self.n_in           = 6;
-        self.n_out          = 6;
-
-#----------------------------------------------------------------------------------------
-#timeSeries
-#  vstup....: casova rada hodnot [list nebo NumPy array]
-#  n_in.....: pocet kroku casoveho zpozdeni pro vstupni hodnoty
-#  n_out....: pocet kroku
-#  dropNaN..: drop NaN ?
-#----------------------------------------------------------------------------------------
-    def toTimeSeries (self, df, n_in=3, n_out=3, dropNaN=True):
-
-        n = n_in + n_out;
-        if n == 0:
-            return df;
-        
-        
-        head   = list(df.head());
-        cols   = list(); 
-        names  = list();
-        n_vars = df.shape [1];
-        
-    # input sequence (t-n, ... t-1)
-        for i in range(n_in , 0, -1):
-            cols.append(df.shift(i));
-            names += [(head[j]+"(t-%d)" % (j+1)) for j in range(n_vars)];
-        
-    # forecast sequence (t, t+1, ... t+n)
-        for i in range(0, n_out):
-            cols.append(df.shift(-i));
-            if i == 0:
-                names += [(head[j]+"(t)" ) for j in range(n_vars)];
-            else:
-                names += [(head[j]+"(t+%d)" % (j+1)) for j in range(n_vars)];
-
-    # concat
-        result = concat(cols , axis=1);
-        result.columns = names;
-    
-    # drop rows with NaN
-        if dropNaN:
-            result.dropna(inplace=True);
-
-        return result;
-
-
-#----------------------------------------------------------------------------------------
-#timeSeries
-#  vstup....: casova rada hodnot [list nebo NumPy array]
-#  n_in.....: pocet kroku casoveho zpozdeni pro vstupni hodnoty
-#  n_out....: pocet kroku
-#  dropNaN..: drop NaN ?     
-#----------------------------------------------------------------------------------------
-    def fromTimeSeries (self, array, colnames, n_in=3, n_out=3, dropNaN=True):
-
-        n = n_in + n_out;
-        if n == 0:
-            df = pd.DataFrame(array);
-            df.columns = colnames;
-            return df;
-        
-        n_vars = df.shape[1]/n;
-
-        #drop vsech sloupcu krome current time....
-        col_start = int(n_vars * n_in);
-        col_end   = int(col_start + n_vars);
-        df =  df.iloc[ : , col_start:col_end];
-
-        df.columns = colnames;
-
-        # drop rows with NaN
-        if dropNaN:
-            df.dropna(inplace=True);
-
-        df_app = df.iloc[(1 - n): ];
-        df_app = df_app.reset_index(drop=True);
-        df     = df.reset_index(drop=True);
-        df     = pd.concat([df, df_app]);
-        df     = df.reset_index(drop=True);
-        return(df);
-    
-#----------------------------------------------------------------------------------------
-#timeSeries
-#  vstup....: casova rada hodnot [list nebo NumPy array]
-#  n_in.....: pocet kroku casoveho zpozdeni pro vstupni hodnoty
-#  n_out....: pocet kroku
-#  dropNaN..: drop NaN ?
-#  df.groupby(np.arange(len(df.columns))//3, axis=1).mean()
-#----------------------------------------------------------------------------------------
-    def fromTimeSeriesMean (self, array, colnames, n_in=3, n_out=3, dropNaN=True):
-
-        n = n_in + n_out;
-        if n <= 1:
-            df = pd.DataFrame(array);
-            df.columns = colnames;
-            return df;
-        
-        df = pd.DataFrame(array);
-        
-        # drop rows with NaN
-        if dropNaN:
-            df.dropna(inplace=True);
-
-        df_app = df.iloc[(1 - n): ];
-        df_app = df_app.reset_index(drop=True);
-        df     = df.reset_index(drop=True);
-        df     = pd.concat([df, df_app]);
-        df     = df.reset_index(drop=True);
-
-        df_mean = pd.DataFrame();
-        
-        icol = int(df.shape[1]/n);
-
-        if(len(colnames) != icol):
-            self.logger.error("Nespravny pocet sloupcu a nazvu !!!");
-            return(None);
-        
-        icnt = 0;
-        for col in colnames:
-            df_mean[col] =  df.iloc[:,icnt::icol].mean(axis=1);
-            icnt += 1;
-        
-        return(df_mean);
-    
-#------------------------------------------------------------------------
-# smoothGraph - trochu vyhlad graf
-#------------------------------------------------------------------------
-    def smoothGraph(self, points, factor=0.9):
-        smoothed_points = [];
-        
-        for point in points:
-            if smoothed_points:
-                previous = smoothed_points[-1];
-                smoothed_points.append(previous * factor + point * (1 - factor));
-            else:
-                smoothed_points.append(point);
-                
-        return smoothed_points;        
-        
-#------------------------------------------------------------------------
-# Neuronova Vrstava DENSE 
-#------------------------------------------------------------------------
-    def neuralNetworkDENSEtrain(self, DataTrain, thread_name):
-
-        n_in  = self.n_in;
-        n_out = self.n_out;
-
-        try:
-            y_train_data = np.array(self.toTimeSeries(DataTrain.train[DataTrain.df_parm_y], n_in, n_out));
-            x_train_data = np.array(self.toTimeSeries(DataTrain.train[DataTrain.df_parm_x], n_in, n_out));
-            y_valid_data = np.array(self.toTimeSeries(DataTrain.valid[DataTrain.df_parm_y], n_in, n_out));
-            x_valid_data = np.array(self.toTimeSeries(DataTrain.valid[DataTrain.df_parm_x], n_in, n_out));
-            
-            if (x_train_data.size == 0 or y_train_data.size == 0):
-                return();
-            
-            inp_size = len(x_train_data[0])
-            out_size = len(y_train_data[0])
-            
-        # normalizace dat k uceni a vstupnich treninkovych dat 
-            self.x_train_scaler = MinMaxScaler(feature_range=(0, 1))
-            x_train_data = self.x_train_scaler.fit_transform(x_train_data)
-            pickle.dump(self.x_train_scaler, open("./temp/x_train_scaler"+thread_name+".pkl", 'wb'))
-            
-            self.y_train_scaler = MinMaxScaler(feature_range=(0, 1))
-            y_train_data = self.y_train_scaler.fit_transform(y_train_data)
-            pickle.dump(self.y_train_scaler, open("./temp/y_train_scaler"+thread_name+".pkl", 'wb'))
-            
-        # normalizace dat k uceni a vstupnich treninkovych dat 
-            self.x_valid_scaler = MinMaxScaler(feature_range=(0, 1))
-            x_valid_data = self.x_valid_scaler.fit_transform(x_valid_data)
-            pickle.dump(self.x_train_scaler, open("./temp/x_valid_scaler"+thread_name+".pkl", 'wb'))
-            
-            self.y_valid_scaler = MinMaxScaler(feature_range=(0, 1))
-            y_valid_data = self.y_valid_scaler.fit_transform(y_valid_data)
-            pickle.dump(self.y_train_scaler, open("./temp/y_valid_scaler"+thread_name+".pkl", 'wb'))
-            
-            
-        # neuronova sit
-            neural_model = Sequential();
-            initializer = tf.keras.initializers.RandomUniform(minval=-0.05, maxval=0.05, seed=None)
-            neural_model.add(tf.keras.Input(shape=(inp_size,)));
-            neural_model.add(layers.Dense(units=inp_size,       activation=self.actf, kernel_initializer=initializer));
-            neural_model.add(layers.Dense(units=self.units,     activation=self.actf, kernel_initializer=initializer));
-            neural_model.add(layers.Dense(units=self.units,     activation=self.actf, kernel_initializer=initializer));
-            neural_model.add(layers.Dense(out_size));
-            
-        # definice ztratove funkce a optimalizacniho algoritmu
-            neural_model.compile(loss='mse', optimizer='adam', metrics=['mse', 'acc'])
-            
-        # natrenuj neural_model na vstupni dataset
-            self.logger.info("Sart train modu...");
-            history = neural_model.fit(x_train_data, 
-                                       y_train_data, 
-                                       epochs=self.epochs, 
-                                       batch_size=self.batch, 
-                                       verbose=2, 
-                                       validation_data=(x_valid_data, y_valid_data)
-                            );
-        
-            self.logger.info("Stop train modu...");
-            neural_model.save("./models/model_"+thread_name+"_"+DataTrain.axis, overwrite=True, include_optimizer=True)
-            
-            self.neural_model = neural_model;
-        
-        # make predictions for the input data
-            return ();
-    
-            
-        except Exception as ex:
-            traceback.print_exc();
-            self.logger.error(traceback.print_exc());
-        
-#------------------------------------------------------------------------
-# Neuronova Vrstava DENSE predict
-# Zapis scaler 
-#   df = pd.DataFrame({'A':[1,2,3,7,9,15,16,1,5,6,2,4,8,9],
-#                      'B':[15,12,10,11,8,14,17,20,4,12,4,5,17,19],
-#                      'C':['Y','Y','Y','Y','N','N','N','Y','N','Y','N',
-#                           'N','Y','Y']})
-#  df[['A','B']] = min_max_scaler.fit_transform(df[['A','B']])  
-#   pickle.dump(min_max_scaler, open("scaler.pkl", 'wb'))
-# Nacti scaler
-#   scalerObj = pickle.load(open("scaler.pkl", 'rb'))
-#   df_test = pd.DataFrame({'A':[25,67,24,76,23],'B':[2,54,22,75,19]})
-#   df_test[['A','B']] = scalerObj.transform(df_test[['A','B']])
-#------------------------------------------------------------------------
-    def neuralNetworkDENSEpredict(self, DataTrain, thread_name):
-        
-        n_in  = self.n_in;
-        n_out = self.n_out;
-        
-        #dff = pd.DataFrame();
-        #dff = DataTrain.test;
-        try:
-            axis     = DataTrain.axis;
-            x_test   = np.array(self.toTimeSeries(DataTrain.test[DataTrain.df_parm_x], n_in, n_out));
-            y_test   = np.array(self.toTimeSeries(DataTrain.test[DataTrain.df_parm_y], n_in, n_out));
-            
-            self.x_train_scaler =  pickle.load(open("./temp/x_valid_scaler"+thread_name+".pkl", 'rb'))
-            self.y_train_scaler =  pickle.load(open("./temp/y_valid_scaler"+thread_name+".pkl", 'rb'))
-            
-        # normalizace vstupnich a vystupnich testovacich dat 
-            x_test   =  self.x_train_scaler.transform(x_test);
-        # predikce site
-            y_result = self.neural_model.predict(x_test);
-        # zapis syrove predikce ke zkoumani    
-            y_result = self.y_train_scaler.inverse_transform(y_result);
-
-            x_test   = self.fromTimeSeriesMean(x_test, DataTrain.df_parm_x, n_in, n_out);
-            y_test   = self.fromTimeSeriesMean(y_test, DataTrain.df_parm_y, n_in, n_out);
-            y_result = self.fromTimeSeriesMean(y_result, DataTrain.df_parm_y, n_in, n_out);
-            
-            return DataFactory.DataResult(x_test, y_test, y_result, axis)
-
-        except Exception as ex:
-            self.logger.warning("POZOR !!! patrne se neshoduji predkladana data s natrenovanym modelem");
-            self.logger.warning("          zkuste nejdrive --typ == train !!!");
-            self.logger.error(traceback.print_exc());
-
-#------------------------------------------------------------------------
-# neuralNetworkDENSEexec_x 
-#------------------------------------------------------------------------
-    def neuralNetworkDENSEexec(self, threads_result, threads_cnt):
-
-        thread_name = "";
-        try:
-            
-            thread_name = threads_result[threads_cnt][1];
-            
-            startTime = int(time.time_ns());
-            
-            self.logger.debug("Nacitam data pro predikci v modu: "+ str(self.typ));
-            self.data.Data = self.data.getData(shuffling=self.shuffling, 
-                                               timestamp_start=self.txdat1, 
-                                               timestamp_stop=self.txdat2,
-                                               type=self.typ,
-                                               ilcnt=self.ilcnt);
-
-            if self.typ == "train":
-                self.logger.debug("Start threadu: %s v TRAIN modu " %(thread_name));
-                self.neuralNetworkDENSEtrain(self.data.DataTrainDim.DataTrain, thread_name);
-            else:    
-                self.logger.debug("Start threadu: %s v PREDICT modu " %(thread_name));
-                #self.model_ = load_model("./models/model_"+thread_name+"_"+ data.DataTrainDim.DataTrain.axis);
-                
-            if self.data.DataTrainDim.DataTrain.test is None or len(self.data.DataTrainDim.DataTrain.test) == 0:
-                self.logger.error("Data threadu : "+ thread_name+ " pro predikci nejsou k dispozici....");
-
-                if self.debug_mode is True:
-                    self.logger.info("Exit...");
-                    sys.exit(0);
-                else:    
-                    return();
-           
-            
-            self.data.DataResultDim.DataResultX = self.neuralNetworkDENSEpredict(self.data.DataTrainDim.DataTrain, thread_name);
-            col_names_y = list(self.data.DataTrain.df_parm_y);
-            threads_result[threads_cnt][0]  =  pd.DataFrame(self.data.DataResultDim.DataResultX.y_result, columns = col_names_y);
-            if self.data.saveDataToPLC(threads_result, self.txdat1, thread_name, self.typ):
-                pass;
-            
-            stopTime = int(time.time_ns());
-            self.logger.info ("Thread: %s, cas vypoctu %d [ms] " %(thread_name, (int(stopTime - startTime)/1000000000)));
-
-            return();
-
-        except FileNotFoundError as e:
-            self.logger.error(f"Nenalezen model site, zkuste nejdrive spustit s parametem train !!!");    
-        except Exception as ex:
-            self.logger.error(traceback.print_exc());
-            
-
-#------------------------------------------------------------------------
-# setter - getter
-#------------------------------------------------------------------------
-    def getModel(self):
-        return self.model_;
-    
-    def getData(self):
-        return self.data;
-
-    def setData(self, data):
-        self.data = data;
-
-    def getTyp(self):
-        return self.typ;
-
-    def setTyp(self, typ):
-        self.typ = typ;
-        
-    def getTxdat1(self):
-        return(self.txdat1);
-    
-    def setTxdat1(self, val):
-        self.txdat1 = val;
-        
-    def getTxdat2(self):
-        return(self.txdat2);
-    
-    def setTxdat2(self, val):
-        self.txdat2 = val;
-
-    def getCurrentDate(self):
-        return(self.current_date);
-    
-    def setCurrentDate(self, val):
-        self.current_date = val;
-        
-#------------------------------------------------------------------------
-# isPing ????
-#------------------------------------------------------------------------
-    def isPing(self):
-        return self.data.isPing();
-
-#------------------------------------------------------------------------
 # Daemon    
 #------------------------------------------------------------------------
 class NeuroDaemon():
@@ -2101,6 +1937,7 @@ class NeuroDaemon():
                  epochs, 
                  batch, 
                  units, 
+                 layers,
                  shuffling, 
                  txdat1, 
                  txdat2, 
@@ -2120,6 +1957,7 @@ class NeuroDaemon():
         self.epochs         = epochs;
         self.batch          = batch;
         self.units          = units;
+        self.layers         = layers;
         self.shuffling      = shuffling;
         self.txdat1         = txdat1; 
         self.txdat2         = txdat2;
@@ -2133,7 +1971,28 @@ class NeuroDaemon():
         self.data           = None;
         self.threads_result = [];
         self.max_threads    = max_threads;
-        
+
+#------------------------------------------------------------------------
+# start daemon pro parametr DENSE
+# tovarna pro beh demona
+#------------------------------------------------------------------------
+    def printParms(self, debug_mode):
+
+        if debug_mode:
+            self.logger.info("Inp Parms begin:---------------------");
+            self.logger.info("model....: %s" %(self.model_));
+            self.logger.info("epochs...: %s" %(str(self.epochs)));
+            self.logger.info("batch....: %s" %(str(self.batch)));
+            self.logger.info("units....: %s" %(str(self.units)));
+            self.logger.info("layers...: %s" %(str(self.layers)));
+            self.logger.info("act.func.: %s" %(self.actf));
+            self.logger.info("txdat1...: %s" %(self.txdat1));
+            self.logger.info("txdat2...: %s" %(self.txdat2));
+            self.logger.info("ilcnt....: %s" %(str(self.ilcnt)));
+            self.logger.info("shuffling: %s" %(str(self.shuffling)));
+            self.logger.info("Inp Parms end:-----------------------");
+        return;
+                     
 #------------------------------------------------------------------------
 # file handlery pro file_preserve
 #------------------------------------------------------------------------
@@ -2202,7 +2061,7 @@ class NeuroDaemon():
         self.logger.info(msg);
         #webbrowser.open("mailto:?to="+ recipient + "&subject=" + subject + "&body=" + msg, new=1);
 #------------------------------------------------------------------------
-# start daemon pro parametr LSTM
+# start daemon pro parametr LSTM, GRU, DENSE a CONV1D
 # tovarna pro beh demona
 #------------------------------------------------------------------------
     def runDaemonLSTM(self, threads_result, threads_cnt):
@@ -2214,38 +2073,40 @@ class NeuroDaemon():
         units  = self.units;
         timestamp_format = "%Y-%m-%d %H:%M:%S";
         plc_isRunning = True;
-        sleep_interval = 1;   #[s]
+        sleep_interval = 0;   #[s]
+        self.printParms(self.debug_mode);
         
         if threads_cnt > 0:
-            epochs = epochs + 20;
-            units  = units  + 61;
+            epochs = epochs + 1;
+            units  = units  + 1;
         
         neural = NeuronLayerLSTM(path_to_result = path_to_result, 
-                                  typ            = "train", 
-                                  model          = self.model_, 
-                                  epochs         = epochs, 
-                                  batch          = self.batch,
-                                  txdat1         = self.txdat1,
-                                  txdat2         = self.txdat2,
-                                  units          = units,
-                                  shuffling      = self.shuffling,
-                                  actf           = self.actf, 
-                                  debug_mode     = self.debug_mode,
-                                  current_date   = self.current_date,
-                                  thread_name    = thread_name,
-                                  ilcnt          = self.ilcnt
+                                  typ           = "train", 
+                                  model         = self.model_, 
+                                  epochs        = epochs, 
+                                  batch         = self.batch,
+                                  txdat1        = self.txdat1,
+                                  txdat2        = self.txdat2,
+                                  units         = units,
+                                  layers        = self.layers,
+                                  shuffling     = self.shuffling,
+                                  actf          = self.actf, 
+                                  debug_mode    = self.debug_mode,
+                                  current_date  = self.current_date,
+                                  thread_name   = thread_name,
+                                  ilcnt         = self.ilcnt
                             );
                             
         neural.setData(self.data);
         plc_isRunning = self.data.isPing();
 
         if plc_isRunning is True:
-            sleep_interval =   1;         #  1 [s]
+            sleep_interval =   0;         #  0 [s]
         else:
             sleep_interval = 600;         #600 [s]
             
         if self.debug_mode is True:
-            sleep_interval =   1;         # 10 [s]   
+            sleep_interval =   0;         #  0 [s]   
 
         current_date =  datetime.now().strftime(timestamp_format);
         current_day  = datetime.today().strftime('%A');   #den v tydnu
@@ -2310,146 +2171,19 @@ class NeuroDaemon():
                     
                 neural.neuralNetworkLSTMexec(threads_result, threads_cnt);
                 neural.setTyp("predict");
-                sleep_interval =  1;         # 1 sekunda
+                sleep_interval =  0;         #  0 [s]
 
             if not plc_isRunning and not self.debug_mode:
                 self.logger.info("PLC OFF:"+ current_date+"");
                 neural.setTyp("train");
-                sleep_interval = 600;        # 10 minut
+                sleep_interval = 600;        #600 [s]
                 
             if self.debug_mode:
                 neural.neuralNetworkLSTMexec(threads_result, threads_cnt);
                 neural.setTyp("predict");
-                sleep_interval =   1;        # 10 sekund
+                sleep_interval =   0;        #  0 [s]
 
             time.sleep(sleep_interval);
-        
-#------------------------------------------------------------------------
-# start daemon pro parametr DENSE
-# tovarna pro beh demona
-#------------------------------------------------------------------------
-    def runDaemonDENSE(self, threads_result, threads_cnt):
-
-
-        i_cnt = 0;
-
-        # new Dense layer
-        thread_name = threads_result[threads_cnt][1];
-        epochs = self.epochs;
-        units  = self.units;
-        timestamp_format = "%Y-%m-%d %H:%M:%S";
-        plc_isRunning = True;
-        sleep_interval = 0;  #[s]
-        
-        if threads_cnt > 0:
-            epochs = epochs + 20;
-            units  = units  + 61;
-
-        neural = NeuronLayerDENSE(path_to_result = path_to_result, 
-                                  typ            = "train", 
-                                  model          = self.model_, 
-                                  epochs         = epochs, 
-                                  batch          = self.batch,
-                                  txdat1         = self.txdat1,
-                                  txdat2         = self.txdat2,
-                                  units          = units,
-                                  shuffling      = self.shuffling,
-                                  actf           = self.actf, 
-                                  debug_mode     = self.debug_mode,
-                                  current_date   = self.current_date,
-                                  thread_name    = thread_name,
-                                  ilcnt          = self.ilcnt
-                            );
-        
-        neural.setData(self.data);
-        
-        plc_isRunning = self.data.isPing();
-        
-        if plc_isRunning is True:
-            sleep_interval =   1;         #  1 [s]
-        else:
-            sleep_interval = 600;         #600 [s]
-
-        if self.debug_mode is True:
-            sleep_interval =   0;         #  5 [s]   
-                        
-
-        current_date = datetime.now().strftime(timestamp_format);
-        current_day  = datetime.today().strftime('%A');
-        given_time   = datetime.strptime(current_date, timestamp_format);
-        
-        final_time_day1 = given_time - timedelta(days=1);
-        final_time_day1_str = final_time_day1.strftime(timestamp_format);
-
-        final_time_day30 = given_time - timedelta(days=30);
-        final_time_day30_str = final_time_day30.strftime(timestamp_format);
-
-        #jsou nabity timestampy pro vyber mnoziny trenikovych dat?
-        if neural.getTxdat1() == "":
-            neural.setTxdat1(final_time_day30_str);
-            self.txdat2 = final_time_day30_str;
-            
-        if neural.getTxdat2() == "":
-            neural.setTxdat2(final_time_day1_str);
-            self.txdat2 = final_time_day1_str;
-
-        self.current_date = current_date;
-        neural.setCurrentDate(current_date);
-        self.data.setCurrentDate(current_date);
-            
-        txdat1 = neural.getTxdat1();
-        txdat2 = neural.getTxdat2();
-
-        self.sendtoMSG(current_date, "plukasik@tajmac-zps.cz", txdat1, txdat2, plc_isRunning);
-        
-        #predikcni beh
-        while True:
-            
-            current_date =  datetime.now().strftime(timestamp_format);
-            plc_isRunning = self.data.isPing();
-            
-            #prechod na novy den - pretrenuj sit...
-            if (datetime.today().strftime('%A') not in current_day):
-                self.logger.info("start train:"+ current_date+"");
-                neural.setTyp("train");
-                
-                current_day = datetime.today().strftime('%A');
-                given_time = datetime.strptime(current_date, timestamp_format);
-                final_time = given_time - timedelta(days=1);
-                final_time_str = final_time.strftime(timestamp_format);
-                txdat1 = neural.getTxdat1();
-                txdat2 = neural.getTxdat2();
-                
-                self.txdat2 = final_time_str;
-                neural.setTxdat2(final_time_str);
-                self.current_date = current_date;
-                neural.setCurrentDate(current_date);
-                self.data.setCurrentDate(current_date);
-
-                self.sendtoMSG(current_date, "plukasik@tajmac-zps.cz", txdat1, txdat2, plc_isRunning);
-
-            if plc_isRunning and not self.debug_mode:
-                if neural.getTyp() == "train":
-                    self.logger.info("PLC ON:"+ current_date + " mode train, thread cnt: " + str(threads_cnt + 1)+"");
-                else:
-                    self.logger.info("PLC ON:"+ current_date + " mode predict, thread cnt: " + str(threads_cnt +1)+"");
-                    
-                neural.neuralNetworkDENSEexec(threads_result, threads_cnt);
-                neural.setTyp("predict");
-                sleep_interval =  1;         # 1 sekunda
-
-            if not plc_isRunning and not self.debug_mode:
-                self.logger.info("PLC OFF:"+ current_date+"");
-                neural.setTyp("train");
-                sleep_interval = 600;        # 10 minut
-                
-            if self.debug_mode:
-                neural.neuralNetworkDENSEexec(threads_result, threads_cnt);
-                neural.setTyp("predict");
-                sleep_interval =   0;        # 10 sekund
-
-            time.sleep(sleep_interval);
-            
 
             
 #------------------------------------------------------------------------
@@ -2460,6 +2194,10 @@ class NeuroDaemon():
         
         pid = None
         pidfile = None
+
+        if os.name == 'nt':
+            pidf_path = Path(pidf_path)    #kvuli windowsum
+        
         try:
             pidfile = open(pidf_path, 'r');
             
@@ -2557,23 +2295,14 @@ class NeuroDaemon():
         
         self.logger.info("Thread executor start, thread cnt:("+str(threads_max_cnt)+") model: "+ self.model_);
         try:
-            if "DENSE" in self.model_:
-                # thread names
-                for i in range(threads_max_cnt):
-                    #prepare result array
-                    arr = [None,"_"+self.model_+"_"+str(i)];
-                    threads_result.append(arr);
+            for i in range(threads_max_cnt):
+                #prepare result array
+                arr = [None,"_"+self.model_+"_"+str(i)];
+                threads_result.append(arr);
                 
-                executor = ThreadPoolExecutor(max_workers = threads_max_cnt);
-                futures = [executor.submit(self.runDaemonDENSE, threads_result, threads_cnt ) for threads_cnt in range(threads_max_cnt)];
-            if "LSTM" in self.model_:
-                # thread names
-                for i in range(threads_max_cnt):
-                    #prepare result array
-                    arr = [None,"_"+self.model_+"_"+str(i)];
-                    threads_result.append(arr);
-                executor = ThreadPoolExecutor(max_workers = threads_max_cnt);
-                futures = [executor.submit(self.runDaemonLSTM, threads_result, threads_cnt ) for threads_cnt in range(threads_max_cnt)];
+            executor = ThreadPoolExecutor(max_workers = threads_max_cnt);
+            futures = [executor.submit(self.runDaemonLSTM, threads_result, threads_cnt ) for threads_cnt in range(threads_max_cnt)];
+            
         except Exception as exc:
                 self.logger.error(traceback.print_exc());
                 
@@ -2741,52 +2470,91 @@ def setEnv(path, model, type):
 
         progname = os.path.basename(__file__);
         current_date =  datetime.now().strftime("%Y-%m-%d %H:%M:%S");
-        path1 = path+model+"_3D";
-        path2 = path1+"/"+current_date+"_"+type
-                
+        
+        if os.name == "nt":
+            current_date = current_date.replace(":", "_");
+
+        path_1 = path+model;
+        path_2 = path_1+"/"+current_date+"_"+type;
         
         try: 
-            os.mkdir("./log");
+            os.mkdir(Path("./log"));
         except OSError as error: 
             pass;
         
         try: 
-            os.mkdir("./pid");
+            os.mkdir(Path("./pid"));
         except OSError as error: 
             pass; 
  
         try: 
-            os.mkdir("./result")
+            os.mkdir(Path("./result"));
         except OSError as error: 
             pass;
         
         try: 
-            os.mkdir("./result/plc_archiv")
+            os.mkdir(Path("./result/plc_archiv"));
         except OSError as error: 
             pass; 
  
+        try: 
+            os.mkdir(Path("./temp"));
+        except OSError as error: 
+            pass;
+        
+        try: 
+            os.mkdir(Path(path_1));
+        except OSError as error: 
+            pass; 
+            
+        try: 
+            os.mkdir(Path(path_2));
+        except OSError as error: 
+            pass; 
+            
+        try: 
+            os.mkdir(Path(path_2+"/src"));
+        except OSError as error: 
+            pass; 
+            
+        try: 
+            os.mkdir(Path("./models"));
+        except OSError as error: 
+            pass;
 
         try: 
-            os.mkdir("./temp");
+            os.mkdir(Path("./br_data"));
         except OSError as error: 
             pass;
-        
+
         try: 
-            os.mkdir(path2);
-        except OSError as error: 
-            pass; 
-            
-        try: 
-            os.mkdir(path2+"/src");
-        except OSError as error: 
-            pass; 
-            
-        try: 
-            os.mkdir("./models");
+            os.mkdir(Path("./br_data/getplc"));
         except OSError as error: 
             pass;
+
+        try:
+            shutil.copy(progname, Path(path_2+"/src"));
+        except shutil.SpecialFileError as error:
+            print("Chyba pri kopii zdrojoveho kodu.", error)
+        except:
+            print("Chyba pri kopii zdrojoveho kodu.")
+
+        try:
+            shutil.copy("ai-parms.txt", Path(path_2+"/src"));
+        except shutil.SpecialFileError as error:
+            print("Chyba pri kopii ai-parms.txt.", error)
+        except:
+            print("Chyba pri kopii ai-parms.txt.")
+            
+        try:
+            shutil.copy("ai-daemon.sh", Path(path_2+"/src"));
+        except shutil.SpecialFileError as error:
+            print("Chyba pri kopii ai-parms.txt.", error)
+        except:
+            print("Chyba pri kopii ai-parms.txt.")
+            
          
-        return path2, current_date;    
+        return path_2, current_date;    
 
 #------------------------------------------------------------------------
 # Exception handler
@@ -2824,7 +2592,7 @@ def help (activations):
     print("                                 a pri velkych cislech preucena - coz je totez jako nedoucena.")
     print("                                 Jedna se tedy o podstatny parametr v procesu uceni site.")
     print(" ");
-    print("        --units           pocet vypocetnich jednotek cislo v intervalu <32,1024>")
+    print("        --units           pocet vypocetnich jednotek <32,1024>")
     print("                                 Pocet vypocetnich jednotek urcuje pocet neuronu zapojenych do vypoctu.")
     print("                                 Mějte prosím na paměti, že velikost units ovlivňuje"); 
     print("                                 dobu tréninku, chybu, které dosáhnete, posuny gradientu atd."); 
@@ -2833,9 +2601,13 @@ def help (activations):
     print("                                 velky pocet units muze zpusobit preuceni site - tedy stejny efekt jako pri");
     print("                                 nedostatecnem poctu units. Pamatujte, ze pocet units vyrazne ovlivnuje alokaci");
     print("                                 pameti. pro 1024 units je treba minimalne 32GiB u siti typu LSTM, GRU nebo BIDI.");
-    print(" ");
     print("                                 Plati umera: cim vetsi units tim vetsi naroky na pamet.");
     print("                                              cim vetsi units tim pomalejsi zpracovani.");
+    print(" ");
+    print("        --layers          pocet vrstev v hidden <0,12>")
+    print("                                 Pocet vrstev v hidden casti - pozor!!! vice vrstev muze")
+    print("                                 mit vyrazne negativni vliv na uceni site"); 
+    print(" ");
     print(" ");
     print("        --actf            Aktivacni funkce - jen pro parametr DENSE")
     print("                                 U LSTM, GRU a BIDI se neuplatnuje.")
@@ -2924,7 +2696,7 @@ def checkActf(actf, activations):
 #                               vyber dat treninkove a validacni mnoziny
 #   txdat2 = "";            - timestamp stop  -
 #                               vyber dat treninkove a validacni mnoziny
-#   shuffling = False;      - promichat nahodne data <True, False>
+#   shuffling = True;       - promichat nahodne data <True, False>
 #   actf = "tanh";          - aktivacni funkce
 #   pid = 0;
 #------------------------------------------------------------------------
@@ -2964,7 +2736,7 @@ def main(argv):
     units          = 71;
     txdat1         = "2022-02-15 00:00:00";
     txdat2         = (datetime.now() + timedelta(days=-1)).strftime("%Y-%m-%d %H:%M:%S");
-    shuffling      = False;
+    shuffling      = True;
     actf           = "elu";
     pid            = 0;
     status         = "";
@@ -2973,6 +2745,7 @@ def main(argv):
     debug_mode     = False;
     max_threads    = 1;
     ilcnt          = 1; # reccnt
+    layers         = 2;
     #debug_mode     = True;
     
         
@@ -2995,10 +2768,11 @@ def main(argv):
                    ["None","pro GRU a LSTM site"]];
 
 
-    #init objektu daemona
+
     path_to_result, current_date = setEnv(path=path_to_result, model=model, type=type);
     logger = setLogger(logf);
-        
+    
+    #init objektu daemona
     try:
         logger.info("ai-daemon start...");
 
@@ -3019,7 +2793,7 @@ def main(argv):
         try:
 
             opts, args = getopt.getopt(sys.argv[1:],
-                                       "hs:d:p:l:m:e:b:u:a:t1:t2:il:h:x",
+                                       "hs:d:p:l:m:e:b:u:l:a:t1:t2:il:sh:h:x",
                                       ["status=",
                                        "debug_mode=", 
                                        "pidfile=", 
@@ -3028,10 +2802,12 @@ def main(argv):
                                        "epochs=", 
                                        "batch=", 
                                        "units=", 
+                                       "layers=", 
                                        "actf=", 
                                        "txdat1=", 
                                        "txdat2=", 
                                        "ilcnt=", 
+                                       "shuffle=", 
                                        "help="]
                                     );
             
@@ -3101,6 +2877,20 @@ def main(argv):
                     help(activations);
                     sys.exit(1);
 
+            elif opt in ("-l", "--layers"):
+                try:
+                    r = range(0, 12);
+                    layers = int(arg);
+                    if layers not in r:
+                        print("Chyba pri parsovani parametru: parametr 'layers' musi byt cislo typu integer v rozsahu <0, 12>");
+                        help(activations);
+                        sys.exit(1);    
+                except:    
+                    print("Chyba pri parsovani parametru: parametr 'layers' musi byt cislo typu integer v rozsahu <0, 12>");
+                    help(activations);
+                    sys.exit(1);
+                    
+
             elif opt in ["-af","--actf"]:
                 actf = arg.lower();
                 if actf == "DENSE":
@@ -3155,6 +2945,13 @@ def main(argv):
                     print("Chyba pri parsovani parametru: parametr 'ilcnt' musi byt cislo typu integer v rozsahu <1, 128>");
                     help(activations);
                     sys.exit(1)
+
+            elif opt in ("-sh", "--shuffle"):
+                sh = arg.upper();
+                if "TRUE" in sh:
+                    shuffling=True;
+                else:
+                    shuffling=False;
          
             elif opt in ["-h","--help"]:
                 help(activations);
@@ -3163,7 +2960,7 @@ def main(argv):
         if len(sys.argv) < 2:
             help(activations);
             sys.exit(1);
-            
+        
 
         #--------------------------------------------------------------------------
         # Start status run as daemon 
@@ -3178,6 +2975,7 @@ def main(argv):
                                       epochs         = epochs,
                                       batch          = batch,
                                       units          = units,
+                                      layers         = layers,
                                       shuffling      = shuffling,
                                       txdat1         = txdat1, 
                                       txdat2         = txdat2,
@@ -3218,6 +3016,7 @@ def main(argv):
                                       epochs         = epochs,
                                       batch          = batch,
                                       units          = units,
+                                      layers         = layers,
                                       shuffling      = shuffling,
                                       txdat1         = txdat1, 
                                       txdat2         = txdat2,
