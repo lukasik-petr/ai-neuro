@@ -16,9 +16,9 @@
 #               numpy,
 #               keras,
 #
-# Windows se pokud mozno vyhnete. Tak je doporuceno v manualech TensorFlow.
-# Nicmene, bylo testovano a funguje. Nelze vsak prenest miniconda applianci
-# z Linuxu na Windows, nutno znovu instalovat.
+# Windows se pokud mozno vyhnete. Tak je doporuceno v manualech TensorFlow
+# i kdyz si myslim ze by to take fungovalo. Ale proc si delat zbytecne
+# starosti...
 #
 # Pozor pro instalaci je nutno udelat nekolik veci
 #  1. instalace prostredi miniconda 
@@ -48,7 +48,10 @@
 #       pip3 install --upgrade tensorflow
 #------------------------------------------------------------------------
 # import vseho co souvisi s demonem...
-import sys, os, getopt, errno; 
+import sys;
+import os;
+import getopt;
+import errno; 
 import traceback;
 import time; 
 import atexit; 
@@ -78,7 +81,6 @@ import pandas.api.types as ptypes;
 import pickle;
 
 from matplotlib import cm;
-#from lockfile.pidlockfile import PIDLockFile;
 from os.path import exists;
 
 from dateutil import parser
@@ -98,7 +100,6 @@ from pandas import concat;
 from concurrent.futures import ThreadPoolExecutor;
 from signal import SIGTERM;
 
-#from tensorflow.keras.datasets import imdb;
 from tensorflow.keras import models;
 from tensorflow.keras import layers;
 from tensorflow.keras import optimizers;
@@ -114,7 +115,6 @@ from tensorflow.keras.layers import GRU;
 from tensorflow.keras.layers import Conv1D;
 from tensorflow.keras.layers import Dropout
 from tensorflow.keras.models import load_model
-#from keras.utils.vis_utils import plot_model
 
 from _cffi_backend import string
 #scipy
@@ -129,11 +129,14 @@ from opcua.common.ua_utils import data_type_to_variant_type
 
 from subprocess import call;
 from plistlib import InvalidFileException
+
 try:
     from tensorflow.python.eager.function import np_arrays
 except ImportError:
     np_arrays = None
+    
 from pandas.errors import EmptyDataError
+
 try:
     from keras.saving.utils_v1.mode_keys import is_train
 except ImportError:
@@ -145,7 +148,7 @@ import logging.config
 from logging.handlers import RotatingFileHandler
 from logging import handlers
 
-
+print("sys.path:", sys.path)
 
 #------------------------------------------------------------------------
 # nastaveni globalnich parametru logu pro demona
@@ -214,9 +217,9 @@ class OPCAgent():
             self.is_ping = False;
             return self.is_ping;
         
-#---------------------------------------------------------------------------        
+#------------------------------------------------------------------------
 # pingSocket - nepotrebuje root prava...
-#---------------------------------------------------------------------------
+#------------------------------------------------------------------------
     def pingSocket(self, host, port):
 
         self.is_ping = False;
@@ -431,7 +434,7 @@ class OPCAgent():
 
 #------------------------------------------------------------------------
 # opcCollectorSendToPLC - zapis kompenzacni parametry do PLC HEIDENHAIN
-#
+#------------------------------------------------------------------------
 # OPC Strom: TM-AI
 #              +---Compensation
 #                   +---CompX         
@@ -530,10 +533,11 @@ class OPCAgent():
     
 #------------------------------------------------------------------------
 # prepJitter,  setJitter
-# v pripade ze se v prubehu cteciho cykluz OPC zadna data nezmeni 
-# je nutno jim pridat umele sum, ktery nezhorsi presnost ale umozni
-# neuronove siti predikci. Sit se nedokaze vyrovnat s konstantnim
-# prubehem datove sady.
+#------------------------------------------------------------------------
+#    v pripade ze se v prubehu cteciho cykluz OPC zadna data nemeni 
+#    pridame jim umele trochu sumu, ktery nezhorsi presnost ale umozni
+#    neuronove siti presnejsi predikci. Sit se prilis nedokaze vyrovnat 
+#    s konstantnim prubehem datove sady.
 #------------------------------------------------------------------------
     def prepJitter(self, df_size):
         
@@ -562,9 +566,11 @@ class OPCAgent():
     
 
 #------------------------------------------------------------------------
-# opcCollectorGetPLCdata - nacti PLC HEIDENHAIN + PLC BR
-# zapis nactena data do br_data - rozsireni treninkove mnoziny 
-# o data z minulosti
+# opcCollectorGetPLCdata
+#------------------------------------------------------------------------
+#    opcCollectorGetPLCdata - nacti PLC HEIDENHAIN + PLC BR
+#    zapis nactena data do br_data - rozsireni treninkove mnoziny 
+#    o data z minulosti
 #------------------------------------------------------------------------
     def opcCollectorGetPlcData(self, df_parms):
 
@@ -601,8 +607,10 @@ class OPCAgent():
             time.sleep(self.plc_timer);
             
         # add jitter 
-        df_predict = self.setJitter(df_predict, df_parms, True);    
-        # zapis pristi treninkova data
+        df_predict = self.setJitter(df_predict, df_parms, True);
+        
+        # zapis nova treninkova data
+        path_to_df = Path(path_to_df);
         if exists(path_to_df):
             self.logger.debug("Nacteno "+str(self.batch)+" vzorku dat pro predict, pripisuji k:"+path_to_df+ "");
             df_predict.to_csv(path_to_df, sep=";", float_format="%.6f", encoding="utf-8", mode="a", index=False, header=False);
@@ -613,10 +621,12 @@ class OPCAgent():
         return(df_predict);
     
 #------------------------------------------------------------------------
-# opcCollectorGetDebugData - totez co opcCollectorGetPLCdata ovsem
-# data se nectou z OPC ale  z CSV souboru. Toto slouzi jen pro ladeni
-# abychom nebyli zavisli na aktivite OPC serveruuuuu.
-# v pripade ladeni se nezapisuji treninkova data....
+# opcCollectorGetDebugData
+#------------------------------------------------------------------------
+#    opcCollectorGetDebugData - totez co opcCollectorGetPLCdata ovsem
+#    data se nectou z OPC ale  z CSV souboru. Toto slouzi jen pro ladeni
+#    abychom nebyli zavisli na aktivite OPC serveruuuuu.
+#    v pripade ladeni se nezapisuji treninkova data....
 #------------------------------------------------------------------------
     def opcCollectorGetDebugData(self, df_parms):
 
@@ -627,7 +637,7 @@ class OPCAgent():
         df_predict    = None;
         df_predict    = pd.DataFrame();
         current_day   = datetime.now().strftime("%Y-%m-%d");
-        csv_file      = "./br_data/predict-debug.csv";
+        csv_file      = Path("./br_data/predict-debug.csv");
         self.logger.debug("Nacitam %s pro debug rezim... " %(csv_file));
 
         try:
@@ -830,8 +840,9 @@ class DataFactory():
 
 #------------------------------------------------------------------------
 # interpolateDF
-# interpoluje data splinem - vyhlazeni schodu na merenych artefaktech
-# u parametru typu 'dev' - odchylky [mikrometr]
+#------------------------------------------------------------------------
+#    interpoluje data splinem - vyhlazeni schodu na merenych artefaktech
+#    u parametru typu 'dev' - odchylky [mikrometr]
 #------------------------------------------------------------------------
     def interpolateDF(self, df, s_factor, ip_yesno):
 
@@ -859,9 +870,16 @@ class DataFactory():
         return df;
 
     
-#------------------------------------------------------------------------
+#-----------------------------------------------------------------------
 # getData
-#------------------------------------------------------------------------
+#-----------------------------------------------------------------------
+#    Hlavni metoda pro manipulaci s daty
+#    V DEBUG modu nacita data pro predikci ze souboru predict-debug.csv
+#    V NODEBUG modu nacita data pro predikci z PLC
+#    data pro trenink a validaci nacita ze souboruuuu
+#    ./br-data/tm-ai_*.csv - provadi merge a plni hlavni datovy
+#    ramec.
+#-----------------------------------------------------------------------
     def getData(self, shuffling = False, 
                 timestamp_start = '2022-01-01 00:00:00', 
                 timestamp_stop  = '2099-12-31 23:59:59', 
@@ -885,9 +903,9 @@ class DataFactory():
            
             #self.DataTrainDim.DataTrain = None;
             
-            #----------------------------------------------------------------------------- 
-            # Data pro trenink - if type == "train"
-            #----------------------------------------------------------------------------- 
+#----------------------------------------------------------------------------- 
+# Data pro trenink - if type == "train"
+#----------------------------------------------------------------------------- 
             if "train" in type:
                 if os.name == "nt":
                     files = os.path.join(Path("./br_data"), "tm-ai_2022*.csv");
@@ -947,9 +965,9 @@ class DataFactory():
                 if size > 0:
                     self.logger.info("Data pro trenink nactena, pocet vet: %d, ilcnt: %d " %(size, ilcnt));
 
-            #----------------------------------------------------------------------------- 
-            # Data pro predict - if type == "train" || type == "predict"
-            #----------------------------------------------------------------------------- 
+#----------------------------------------------------------------------------- 
+# Data pro predict - if type == "train" || type == "predict"
+#----------------------------------------------------------------------------- 
             self.logger.debug("Data pro predikci....");
             if self.debug_mode is True:
                 df_test = self.opc.opcCollectorGetDebugData(self.df_parmX);
@@ -985,10 +1003,12 @@ class DataFactory():
             
 #-----------------------------------------------------------------------
 # saveDataToPLC  - result
-# index = pd.RangeIndex(start=10, stop=30, step=2, name="data")
+#-----------------------------------------------------------------------
+#     index = pd.RangeIndex(start=10, stop=30, step=2, name="data")
 #
-#         return True - nacti dalsi porci dat pro predict
-#         return False - nenacitej dalsi porci dat pro predict.
+#     return True - nacti dalsi porci dat pro predict
+#     return False - nenacitej dalsi porci dat pro predict.
+#     POZOR !!! do PLC zapisuje jen v NODEBUG modu
 #-----------------------------------------------------------------------
     def saveDataToPLC(self, threads_result, timestamp_start, thread_name,typ,  model, units, epochs, saveresult=True):
 
@@ -1080,12 +1100,12 @@ class DataFactory():
                 
         return (pd.DataFrame([l_plc], columns=[l_plc_col]));
         
-            
-        
         
 #-----------------------------------------------------------------------
 # saveDataResult  - result
-# index = pd.RangeIndex(start=10, stop=30, step=2, name="data")
+#-----------------------------------------------------------------------
+#    index = pd.RangeIndex(start=10, stop=30, step=2, name="data")
+#    POZOR !!! volano jen v DEBUG modu
 #-----------------------------------------------------------------------
     def saveDataResult(self, timestamp_start, df_result,  model, typ, units, epochs, saveresult=True):
 
@@ -1181,6 +1201,9 @@ class DataFactory():
 #-----------------------------------------------------------------------
 # saveParmsMAE - zapise hodnoty MAE v zavislosti na pouzitych parametrech
 #-----------------------------------------------------------------------
+#    Zapisuje vysledky mereni a predikce
+#    POZOR !!! volano jen v DEBUG modu
+#-----------------------------------------------------------------------
     def saveParmsMAE(self, df,  model, typ, units, epochs):
 
         filename = "./result/mae_"+str(self.current_date)[0:10]+"_"+model+"_"+str(units)+"_"+str(epochs)+".csv"
@@ -1236,14 +1259,14 @@ class DataFactory():
         return;    
         
 #-----------------------------------------------------------------------
-# getParmsFromFile - nacte parametry z ./parms/parms.txt
+# getParmsFromFile - nacte parametry z ./cfg/ai-parms.cfg
 #-----------------------------------------------------------------------
     def getParmsFromFile(self):
         # otevreno v read mode
         
-        parmfile = "ai-parms.txt"
+        parmfile = "./cfg/ai-parms.cfg";
         try:
-            file = open(parmfile, "r")
+            file = open(Path(parmfile), "r")
             lines = file.readlines();
             
             count = 0
@@ -1330,11 +1353,8 @@ class DataFactory():
     def myIntFormat(self, x):
         return ('%.f' % x).rstrip('.');
 
-    
-
-
 #------------------------------------------------------------------------
-# Neuronova Vrstava LSTM
+# Neuronova Vrstava -obecna neuronova vrstva
 #------------------------------------------------------------------------
 class NeuronLayerLSTM():
     #definice datoveho ramce
@@ -1400,9 +1420,9 @@ class NeuronLayerLSTM():
         self.n_in           = 2;
         self.n_out          = 2;
 
-#-----------------------------------------------------------------------
+#------------------------------------------------------------------------
 # toTensorLSTM(self, dataset, window = 16):
-#-----------------------------------------------------------------------
+#------------------------------------------------------------------------
 # Pracujeme - li s rekurentnimi sitemi (LSTM GRU...), pak 
 # musíme vygenerovat dataset ve specifickém formátu.
 # Vystupem je 3D tenzor ve forme 'window' casovych kroku.
@@ -1423,7 +1443,7 @@ class NeuronLayerLSTM():
 # poznamka: na konec tenzoru se pripoji libovolne 'okno' aby se velikost
 #           o toto okno zvetsila - vyresi se tim chybejici okno pri predikci
 #           
-#-----------------------------------------------------------------------
+#------------------------------------------------------------------------
     
     def toTensorLSTM(self, dataset, window):
         
@@ -1454,25 +1474,27 @@ class NeuronLayerLSTM():
         
         return NeuronLayerLSTM.DataSet(X_dataset, y_dataset, dataset_cols);
 
-#-----------------------------------------------------------------------
+#------------------------------------------------------------------------
 # fromTensorLSTMMean(self, dataset, window = 64):
-#-----------------------------------------------------------------------
+#------------------------------------------------------------------------
 # Udelej mean nad window
 # funkce vraci: y_result - 2D array vysledku predikce
-# zrus 
-#-----------------------------------------------------------------------
+#
+#------------------------------------------------------------------------
     def fromTensorLSTMMean(self, dataset, dropNaN=True):
         df = pd.DataFrame(np.mean(dataset, axis=1));
         df = df.iloc[ : -self.window, :];
         return(df);
+    
+#------------------------------------------------------------------------    
+# toTimeSeries
+#------------------------------------------------------------------------    
+#    vstup....: casova rada hodnot [list nebo NumPy array]
+#    n_in.....: pocet kroku casoveho zpozdeni pro vstupni hodnoty
+#    n_out....: pocet kroku
+#    dropNaN..: drop NaN ?
+#------------------------------------------------------------------------    
 
-#----------------------------------------------------------------------------------------
-#timeSeries
-#  vstup....: casova rada hodnot [list nebo NumPy array]
-#  n_in.....: pocet kroku casoveho zpozdeni pro vstupni hodnoty
-#  n_out....: pocet kroku
-#  dropNaN..: drop NaN ?
-#----------------------------------------------------------------------------------------
     def toTimeSeries (self, df, n_in=3, n_out=3, dropNaN=True):
 
         n = n_in + n_out;
@@ -1508,14 +1530,15 @@ class NeuronLayerLSTM():
         return result;
 
 
-#----------------------------------------------------------------------------------------
-#timeSeries
-#  vstup....: casova rada hodnot [list nebo NumPy array]
-#  n_in.....: pocet kroku casoveho zpozdeni pro vstupni hodnoty
-#  n_out....: pocet kroku
-#  dropNaN..: drop NaN ?
-#  df.groupby(np.arange(len(df.columns))//3, axis=1).mean()
-#----------------------------------------------------------------------------------------
+#------------------------------------------------------------------------    
+# fromTimeSeries
+#------------------------------------------------------------------------    
+#    vstup....: casova rada hodnot [list nebo NumPy array]
+#    n_in.....: pocet kroku casoveho zpozdeni pro vstupni hodnoty
+#    n_out....: pocet kroku
+#    dropNaN..: drop NaN ?
+#    df.groupby(np.arange(len(df.columns))//3, axis=1).mean()
+#------------------------------------------------------------------------
     def fromTimeSeriesMean (self, array, colnames, n_in=3, n_out=3, dropNaN=True):
 
         n = n_in + n_out;
@@ -1543,9 +1566,9 @@ class NeuronLayerLSTM():
         
         return(df_mean);
 
-#---------------------------------------------------------------------------
+#------------------------------------------------------------------------
 # smoothGraph - trochu vyhlad graf
-#---------------------------------------------------------------------------
+#------------------------------------------------------------------------
     def smoothGraph(self, points, factor=0.9):
         smoothed_points = [];
         
@@ -1559,9 +1582,9 @@ class NeuronLayerLSTM():
         return smoothed_points;        
 
 
-#----------------------------------------------------------------------------------------
-#printTrain
-#----------------------------------------------------------------------------------------
+#------------------------------------------------------------------------    
+# printTrainGraph - tisk optimalizacnich grafu (jen v debug modu)
+#------------------------------------------------------------------------    
     def printTrainGraph (self, history):
         #kolik se vynecha o zacatku v grafu?
         start_point = 0
@@ -1602,7 +1625,7 @@ class NeuronLayerLSTM():
 
 
 #------------------------------------------------------------------------
-# Neuronova Vrstava LSTM lusta
+# Neuronova Vrstva - definice 
 #------------------------------------------------------------------------
     def neuralNetworkLSTMtrain(self, DataTrain, thread_name):
 
@@ -1666,19 +1689,17 @@ class NeuronLayerLSTM():
             Y_valid = self.toTensorLSTM(y_valid_data, window=window_Y);
             Y_valid.X_dataset = Y_valid.X_dataset[0 : X_valid.X_dataset.shape[0]];
             
-        #---------------------------------------------------------------------------------------------    
-        # Input layer    
-        #---------------------------------------------------------------------------------------------    
+#------------------------------------------------------------------------    
+# Input layer    
+#------------------------------------------------------------------------    
             neural_model = Sequential();
             initializer  = tf.keras.initializers.RandomUniform(minval=-0.05, maxval=0.05, seed=None)
             neural_model.add(Input(shape=(X_train.X_dataset.shape[1], X_train.cols,)));
 
-        #---------------------------------------------------------------------------------------------    
-        # Hidden layer - begin
-        #---------------------------------------------------------------------------------------------    
+#------------------------------------------------------------------------    
+# Hidden layer - begin DENSE, LSTM, GRU, CONV1D
+#------------------------------------------------------------------------    
             for i in range(layers_count):
-        # umisteni Dropout musi byt zde - dava nejlepsi vysledky.....
-                
                     
                 if "DENSE" in model:
                     self.logger.debug(model);
@@ -1734,15 +1755,13 @@ class NeuronLayerLSTM():
                     neural_model.add(Dropout(rate=rate, noise_shape=None, seed=None));
 
             #end-for
-
-        #---------------------------------------------------------------------------------------------    
-        # Hidden layer - end
-        #---------------------------------------------------------------------------------------------    
-
+#------------------------------------------------------------------------
+# Hidden layer - end
+#------------------------------------------------------------------------    
                     
-        #---------------------------------------------------------------------------------------------    
-        # Output layer
-        #---------------------------------------------------------------------------------------------    
+#------------------------------------------------------------------------    
+# Output layer
+#------------------------------------------------------------------------    
         
             neural_model.add(layers.Dense(Y_train.cols, activation="relu"));
 
@@ -1765,8 +1784,6 @@ class NeuronLayerLSTM():
                 neural_model.summary();
                 self.printTrainGraph(history);
                 
-
-        # make predictions for the input data
             self.neural_model = neural_model;
             return ();
         
@@ -1775,7 +1792,7 @@ class NeuronLayerLSTM():
         
         
 #------------------------------------------------------------------------
-# Neuronova Vrstava LSTM predict 
+# Neuronova Vrstava - predict 
 #------------------------------------------------------------------------
     def neuralNetworkLSTMpredict(self, DataTrain, thread_name):
         
@@ -1823,7 +1840,7 @@ class NeuronLayerLSTM():
             self.logger.error(traceback.print_exc());
 
 #------------------------------------------------------------------------
-# neuralNetworkLSTMexec_x 
+# neuralNetworkLSTMexec - exec 
 #------------------------------------------------------------------------
     def neuralNetworkLSTMexec(self, threads_result, threads_cnt):
 
@@ -2060,6 +2077,7 @@ class NeuroDaemon():
         msg = msg0+msg1+msg2+msg3 ;
         self.logger.info(msg);
         #webbrowser.open("mailto:?to="+ recipient + "&subject=" + subject + "&body=" + msg, new=1);
+        
 #------------------------------------------------------------------------
 # start daemon pro parametr LSTM, GRU, DENSE a CONV1D
 # tovarna pro beh demona
@@ -2424,17 +2442,17 @@ class NeuroDaemon():
     def setDebug(self, debug_mode):
         self.debug_mode = debug_mode;
 
+        
 #------------------------------------------------------------------------
 # MAIN CLASS
 #------------------------------------------------------------------------
-
 #------------------------------------------------------------------------
-# definice loggeru
+# definice loggeru - parametry nacteny z ./cfg/log.cfg
 #------------------------------------------------------------------------
 def setLogger(logf):
 
-    logging.config.fileConfig(fname='log.config');
-    logger = logging.getLogger("ai")
+    logging.config.fileConfig(fname=Path("./cfg/log.cfg"));
+    logger = logging.getLogger("ai");
     return(logger);
 
 #------------------------------------------------------------------------
@@ -2450,10 +2468,10 @@ def saveModelToArchiv(model, dest_path, data):
         if data.DataTrainDim.DataTrain  == None:
             pass;
         else:    
-            src_dir_  = src_dir + axes[0]
-            dest_dir_ = dest_path + dest_dir + axes[0]
-            files = os.listdir(src_dir_)
-            shutil.copytree(src_dir_, dest_dir_)
+            src_dir_  = src_dir + axes[0];
+            dest_dir_ = dest_path + dest_dir + axes[0];
+            files = os.listdir(Path(src_dir_));
+            shutil.copytree(Path(src_dir_), Path(dest_dir_));
             
         return(0);    
    
@@ -2469,16 +2487,18 @@ def saveModelToArchiv(model, dest_path, data):
 def setEnv(path, model, type):
 
         progname = os.path.basename(__file__);
-        current_date =  datetime.now().strftime("%Y-%m-%d %H:%M:%S");
-        
-        if os.name == "nt":
-            current_date = current_date.replace(":", "_");
+        current_date =  datetime.now().strftime("%Y-%m-%d_%H.%M.%S");
 
         path_1 = path+model;
         path_2 = path_1+"/"+current_date+"_"+type;
         
         try: 
             os.mkdir(Path("./log"));
+        except OSError as error: 
+            pass;
+
+        try: 
+            os.mkdir(Path("./cfg"));
         except OSError as error: 
             pass;
         
@@ -2624,6 +2644,15 @@ def help (activations):
     print("                                 od pocatku mereni: 2022-02-15 00:00:00 ");
     print("                                 do konce   mereni: current timestamp() - 1 [den] ");
     print(" ");
+    print("        --ilcnt           vynechavani vet v treninkove mnozine - test s jakum poctem vet lze");
+    print("                                 jeste solidne predikovat 1 = vsechny vety");
+    print("                                                          2 = nactena kazda druha");
+    print("                                                          3 = nactena kazda treti...");
+    print("        --shuffle         nahodne promichani dat ");
+    print("                                 shuffle=TRUE - implicitni hodnota - treninkova data");
+    print("                                                se promichaji                       ");
+    print("                                 shuffle=FALSE- treninkova data se nepromichaji     ");
+    print(" ");
     print("POZOR! typ behu 'train' muze trvat nekolik hodin, zejmena u typu site LSTM, GRU nebo BIDI!!!");
     print("       pricemz 'train' je povinny pri prvnim behu site. V rezimu 'train' se zapise ");
     print("       natrenovany model site..");
@@ -2727,14 +2756,15 @@ def main(argv):
     vzorcich.
     '''
     
-    
-    # parametry 
+#-----------------------------------------------------------------------------
+# implicitni  parametry - plati pokud nejsou prebity parametry ze sys.argv[1:]
+#-----------------------------------------------------------------------------
     parm0          = sys.argv[0];        
     model          = "DENSE";
     epochs         = 64;
     batch          = 256;
     units          = 71;
-    txdat1         = "2022-02-15 00:00:00";
+    txdat1         = "2022-01-01 00:00:01";
     txdat2         = (datetime.now() + timedelta(days=-1)).strftime("%Y-%m-%d %H:%M:%S");
     shuffling      = True;
     actf           = "elu";
@@ -2749,6 +2779,9 @@ def main(argv):
     #debug_mode     = True;
     
         
+#-----------------------------------------------------------------------------
+# seznam povolenych aktivacnich funkci
+#-----------------------------------------------------------------------------
     activations = [["deserialize", "Returns activation function given a string identifier"],
                    ["elu", "Exponential Linear Unit"],
                    ["exponential", "Exponential activation function"],
@@ -2772,11 +2805,16 @@ def main(argv):
     path_to_result, current_date = setEnv(path=path_to_result, model=model, type=type);
     logger = setLogger(logf);
     
-    #init objektu daemona
+#-----------------------------------------------------------------------------
+# init objektu daemona
+#-----------------------------------------------------------------------------
     try:
         logger.info("ai-daemon start...");
 
-        #kontrola platne aktivacni funkce        
+#-----------------------------------------------------------------------------
+# kontrola platne aktivacni funkce
+#-----------------------------------------------------------------------------
+        
         if not checkActf(actf, activations):
             print("Chybna aktivacni funkce - viz help...");
             help(activations)
@@ -2787,9 +2825,9 @@ def main(argv):
         
         txdat_format = "%Y-%m-%d %h:%m:%s"
 
-        # zpracovani argumentu
-        opts = [];
-        args = [];
+#-----------------------------------------------------------------------------
+# zpracovani argumentu
+#-----------------------------------------------------------------------------
         try:
 
             opts, args = getopt.getopt(sys.argv[1:],
@@ -2815,7 +2853,7 @@ def main(argv):
             print("Chyba pri parsovani parametru:",opts);
             help(activations);
             sys.exit(1);
-            
+
         for opt, arg in opts:
             
             if opt in ["-s","--status"]:
@@ -2839,7 +2877,6 @@ def main(argv):
                     txdat2 = (datetime.now() + timedelta(days=-1)).strftime("%Y-%m-%d %H:%M:%S");
                 else:
                     debug_mode = True;
-                    txdat2 = "2022-06-29 23:59:59";
             
             elif opt in ["-p","--pidfile"]:
                 pidf = arg;
@@ -2914,7 +2951,7 @@ def main(argv):
                     
 
             elif opt in ["-t1","--txdat1"]:
-                txdat1 = arg;
+                txdat1 = arg.replace("_", " ");
                 if txdat1:
                     try:
                         res = bool(parser.parse(txdat1));
@@ -2924,7 +2961,7 @@ def main(argv):
                         sys.exit(1);    
 
             elif opt in ["-t2","--txdat2"]:
-                txdat2 = arg;
+                txdat2 = arg.replace("_", " ");
                 if txdat2:
                     try:
                         res = bool(parser.parse(txdat2));
@@ -2956,15 +2993,14 @@ def main(argv):
             elif opt in ["-h","--help"]:
                 help(activations);
                 sys.exit(0);
-        
+
         if len(sys.argv) < 2:
             help(activations);
             sys.exit(1);
         
-
-        #--------------------------------------------------------------------------
-        # Start status run as daemon 
-        #--------------------------------------------------------------------------
+#-----------------------------------------------------------------------------
+# Start status - run as daemon 
+#-----------------------------------------------------------------------------
         if "start" in status:
             try:
                 
@@ -3003,9 +3039,9 @@ def main(argv):
                 logger.info("ai-daemon start exception...");
                 pass
 
-        #--------------------------------------------------------------------------
-        # Run status run as prog 
-        #--------------------------------------------------------------------------
+#-----------------------------------------------------------------------------
+# Run status - run as prog 
+#-----------------------------------------------------------------------------
         elif "run" in status:
             try:
                 
@@ -3042,9 +3078,9 @@ def main(argv):
                 logger.info("ai-daemon start exception...");
                 pass
 
-        #--------------------------------------------------------------------------
-        # Stop status
-        #--------------------------------------------------------------------------
+#-----------------------------------------------------------------------------
+# Stop status - exit  
+#-----------------------------------------------------------------------------
         elif "stop" in status:
             logger.info("ai-daemon stop...");
             daemon_.stop();
@@ -3087,13 +3123,11 @@ def main(argv):
 
 
 
-
-#------------------------------------------------------------------------
+#-----------------------------------------------------------------------------
 # main entry point
-#------------------------------------------------------------------------
-        
+#-----------------------------------------------------------------------------
 if __name__ == "__main__":
 
-    main(sys.argv[1:])
+    main(sys.argv[1:]);
     
 
