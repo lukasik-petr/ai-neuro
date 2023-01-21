@@ -1,12 +1,34 @@
 #!/usr/bin/python3
 #------------------------------------------------------------------------
-# ai-daemon
-# (C) GNU General Public License,
-# pro potreby projektu TM-AI vyrobil Petr Lukasik , 2022 ");
+#    ai-daemon - predikce vlivu teploty na presnost obrabeni
+#
+#    @author plukasik
+#    
+#    Tento program je volny software; muzete jej sirit a modifikovat podle
+#    ustanoveni Obecne verejne licence GNU, vydavane Free Software
+#    Foundation; a to bud verze 2 teto licence anebo (podle vaseho
+#    uvazeni) kterekoli pozdejsi verze.
+#    
+#    Tento program je rozsirovan v nadeji, ze bude uzitecny, avsak BEZ
+#    JAKEKOLI ZARUKY; neposkytuji se ani odvozene zaruky PRODEJNOSTI anebo
+#    VHODNOSTI PRO URCITY UCEL. Dalsi podrobnosti hledejte ve Obecne
+#    verejne licenci GNU.
+#    
+#    Kopii Obecne verejne licence GNU jste meli obdrzet spolu s timto
+#    programem; pokud se tak nestalo, napiste o ni Free Software
+#    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+#    
+#    Program je ABSOLUTNE BEZ ZARUKY. Jde o volny software a jeho sireni za
+#    jistych podminek je vitano. pripominky na plukasik@tajmac-zps.cz
+#    
+#    Tento produkt obsahuje software vyvijeny v ramci Apache Software
+#    Foundation <http://www.apache.org/>.
+#    
+#    pro potreby projektu TM-AI vyrobil Petr Lukasik , 2022
+#    plukasik@tajmac-zps.cz
+#
 #------------------------------------------------------------------------
-# program pro projekt TM-AI v TAJMAC-ZPS,a.s.
-# predikce vlivu teploty na presnost obrabeni
-# Prerekvizity: linux Debian-11 nebo Ubuntu-20.04,);
+#    Prerekvizity: linux Debian-11 nebo Ubuntu-20.04,);
 #               miniconda3,
 #               python 3.9,
 #               tensorflow 2.8,
@@ -16,38 +38,38 @@
 #               numpy,
 #               keras,
 #
-# Windows se pokud mozno vyhnete. Tak je doporuceno v manualech TensorFlow
-# i kdyz si myslim ze by to take fungovalo. Ale proc si delat zbytecne
-# starosti...
-#
-# Pozor pro instalaci je nutno udelat nekolik veci
-#  1. instalace prostredi miniconda 
-#       a. stahnout z webu miniconda3 v nejnovejsi verzi
-#       b. chmod +x Miniconda3-py39_4.11.0-Linux-x86_64.sh
-#       c. ./Miniconda3-py39_4.11.0-Linux-x86_64.sh
-#
-#  2. update miniconda
-#       conda update conda
-#
-#  3. vyrobit behove prostredi 'tf' v miniconda
-#       conda create -n tf python=3.8
-#
-#  4. aktivovat behove prostredi tf (preX tim je nutne zevrit a znovu
-#     otevrit terminal aby se conda aktivovala.
-#       conda activate  tf
-#
-#  5. instalovat tyto moduly (pomoci conda)
-#       conda install tensorflow=2.8 
-#       conda install mathplotlib
-#       conda install scikit-learn-intelex
-#       conda install pandas
-#       conda install numpy
-#       conda install keras
-#
-#  6. v prostredi tf jeste upgrade tensorflow 
-#       pip3 install --upgrade tensorflow
+#    Pozor pro instalaci je nutno udelat nekolik veci
+#     1. instalace prostredi miniconda 
+#          a. stahnout z webu miniconda3 v nejnovejsi verzi
+#          b. chmod +x Miniconda3-py39_4.11.0-Linux-x86_64.sh
+#          c. ./Miniconda3-py39_4.11.0-Linux-x86_64.sh
+#   
+#     2. update miniconda
+#          conda update conda
+#   
+#     3. vyrobit behove prostredi 'tf' v miniconda
+#          conda create -n tf python=3.9
+#   
+#     4. aktivovat behove prostredi tf (preX tim je nutne zevrit a znovu
+#        otevrit terminal aby se conda aktivovala.
+#          conda activate  tf
+#   
+#     5. instalovat tyto moduly 
+#          conda install tensorflow=2.9 
+#          conda install tf-nightly=2.9 
+#          conda install mathplotlib
+#          conda install scikit-learn-intelex
+#          conda install pandas
+#          conda install numpy
+#          conda install keras
+#          conda install lockfile
+#          conda install pickle
+#   
+#     6. v prostredi tf jeste upgrade tensorflow 
+#          pip3 install --upgrade tensorflow
 #------------------------------------------------------------------------
 # import vseho co souvisi s demonem...
+#------------------------------------------------------------------------
 import sys;
 import os;
 import getopt;
@@ -57,7 +79,8 @@ import time;
 import atexit; 
 import signal; 
 import socket;
-#import grp;
+
+
 try:
     import daemon, daemon.pidfile;
 except ImportError:
@@ -147,8 +170,6 @@ import logging
 import logging.config
 from logging.handlers import RotatingFileHandler
 from logging import handlers
-
-print("sys.path:", sys.path)
 
 #------------------------------------------------------------------------
 # nastaveni globalnich parametru logu pro demona
@@ -640,6 +661,12 @@ class OPCAgent():
         csv_file      = Path("./br_data/predict-debug.csv");
         self.logger.debug("Nacitam %s pro debug rezim... " %(csv_file));
 
+        file_exists = exists(csv_file)
+
+        if not file_exists:
+            self.logger.info("Soubor ./br_data/predict-debug.csv nenalezen, exit(1)...");
+            sys.exit(1);
+
         try:
             df_predict = pd.read_csv(csv_file,
                                      sep=",|;", 
@@ -651,7 +678,7 @@ class OPCAgent():
                         );
             
         except  EmptyDataError as ex:
-            self.logger.debug("EmptyDataError %s " %(ex));
+            self.logger.debug("Soubor predict-debug EmptyDataError %s " %(ex));
             return None;
         #df_predict = self.df_debug[self.df_debug_count : self.df_debug_count + self.batch];
         
@@ -884,7 +911,8 @@ class DataFactory():
                 timestamp_start = '2022-01-01 00:00:00', 
                 timestamp_stop  = '2099-12-31 23:59:59', 
                 type            = "predict",
-                ilcnt           = 1):
+                ilcnt           = 1,
+                ip_yesno        = False):
         
         txdt_b      = False;
         df          = pd.DataFrame(columns = self.df_parmX);
@@ -894,10 +922,9 @@ class DataFactory():
         size_valid  = 0;
         size_test   = 0;
         size        = 0;
-        
-        ip_yesno    = False;
-        s_factor    = 0.5   #  0.5 pro periodu 1[s]
-                            #  0.01 pro periodu 60[s]
+                            #  interpolacni faktor
+        s_factor    = 0.5   #  0.5 pro periodu 60[s]
+                            #  0.01 pro periodu 1[s]
         
         try:
            
@@ -908,11 +935,17 @@ class DataFactory():
 #----------------------------------------------------------------------------- 
             if "train" in type:
                 if os.name == "nt":
-                    files = os.path.join(Path("./br_data"), "tm-ai_2022*.csv");
+                    files = os.path.join(Path("./br_data"), "tm-ai_*.csv");
                 else:
-                    files = os.path.join("./br_data", "tm-ai_2022*.csv");
+                    files = os.path.join("./br_data", "tm-ai_*.csv");
                 # list souboru pro join
                 joined_list = glob.glob(files);
+
+                len_list = len(joined_list);
+
+                if len_list == 0:
+                    self.logger.info("Data pro trenink nejsou k dispozici, exit()...");
+                    sys.exit(1);
             
                 # sort souboru pro join
                 joined_list.sort(key=None, reverse=False);
@@ -946,7 +979,7 @@ class DataFactory():
                 
                 if len(df) <= 1:
                     self.logger.error("Data pro trenink maji nulovou velikost - exit(1)");
-                    os._exit(1);
+                    sys.exit(1);
 
                 #nactena kazda ilcnt-ta veta - zmenseni mnoziny dat pro uceni.
                 #if self.debug_mode is True and ilcnt > 1:
@@ -1381,7 +1414,8 @@ class NeuronLayerLSTM():
                  debug_mode,
                  current_date = "",
                  thread_name = "",
-                 ilcnt = 1):
+                 ilcnt = 1,
+                 ip_yesno = False):
 
         self.logger    = logging.getLogger("ai");
 
@@ -1412,6 +1446,7 @@ class NeuronLayerLSTM():
         self.x_valid_scaler = None;
         self.y_valid_scaler = None;
         self.neural_model   = None;
+        self.ip_yesno       = ip_yesno;
 
         
         #parametry window-size
@@ -1852,11 +1887,12 @@ class NeuronLayerLSTM():
 
             #nacti pouze predikcni data 
             self.logger.debug("Nacitam data pro predikci, v modu: "+ str(self.typ));
-            self.data.Data = self.data.getData(shuffling=self.shuffling, 
-                                               timestamp_start=self.txdat1, 
-                                               timestamp_stop=self.txdat2,
-                                               type=self.typ,
-                                               ilcnt=self.ilcnt);
+            self.data.Data = self.data.getData(shuffling       = self.shuffling, 
+                                               timestamp_start = self.txdat1, 
+                                               timestamp_stop  = self.txdat2,
+                                               type            = self.typ,
+                                               ilcnt           = self.ilcnt,
+                                               ip_yesno        = self.ip_yesno);
 
 
             if self.typ == 'train':
@@ -1871,7 +1907,7 @@ class NeuronLayerLSTM():
                 
                 if self.debug_mode is True:
                     self.logger.info("Exit...");
-                    sys.exit(0);
+                    sys.exit(1);
                 else:    
                     return();
            
@@ -1962,7 +1998,8 @@ class NeuroDaemon():
                  debug_mode,
                  current_date,
                  max_threads,
-                 ilcnt
+                 ilcnt,
+                 ip_yesno
             ):
 
         self.logger    = logging.getLogger('ai-daemon');
@@ -1988,6 +2025,7 @@ class NeuroDaemon():
         self.data           = None;
         self.threads_result = [];
         self.max_threads    = max_threads;
+        self.ip_yesno       = ip_yesno;
 
 #------------------------------------------------------------------------
 # start daemon pro parametr DENSE
@@ -1996,18 +2034,22 @@ class NeuroDaemon():
     def printParms(self, debug_mode):
 
         if debug_mode:
+            time.sleep(1);
             self.logger.info("Inp Parms begin:---------------------");
-            self.logger.info("model....: %s" %(self.model_));
-            self.logger.info("epochs...: %s" %(str(self.epochs)));
-            self.logger.info("batch....: %s" %(str(self.batch)));
-            self.logger.info("units....: %s" %(str(self.units)));
-            self.logger.info("layers...: %s" %(str(self.layers)));
-            self.logger.info("act.func.: %s" %(self.actf));
-            self.logger.info("txdat1...: %s" %(self.txdat1));
-            self.logger.info("txdat2...: %s" %(self.txdat2));
-            self.logger.info("ilcnt....: %s" %(str(self.ilcnt)));
-            self.logger.info("shuffling: %s" %(str(self.shuffling)));
+            self.logger.info("model............: %s" %(self.model_));
+            self.logger.info("epochs...........: %s" %(str(self.epochs)));
+            self.logger.info("batch............: %s" %(str(self.batch)));
+            self.logger.info("units............: %s" %(str(self.units)));
+            self.logger.info("layers...........: %s" %(str(self.layers)));
+            self.logger.info("act.func.........: %s" %(self.actf));
+            self.logger.info("txdat1...........: %s" %(self.txdat1));
+            self.logger.info("txdat2...........: %s" %(self.txdat2));
+            self.logger.info("ilcnt............: %s" %(str(self.ilcnt)));
+            self.logger.info("shuffling........: %s" %(str(self.shuffling)));
+            self.logger.info("debug mode.......: %s" %(self.debug_mode));
+            self.logger.info("interpolate......: %s" %(str(self.ip_yesno)));
             self.logger.info("Inp Parms end:-----------------------");
+            time.sleep(5);
         return;
                      
 #------------------------------------------------------------------------
@@ -2064,12 +2106,12 @@ class NeuroDaemon():
         
         subject = "ai-daemon";
         if plc_isRunning:
-            msg0 = "\nai-daemon v rezimu run....\n";
+            msg0 = "ai-daemon v rezimu run (stroj je zapnut)...\n";
             msg1 = "start v modu: train, cas:"+str(current_time)+"\n";
             msg2 = "treninkova mnozina, timestamp start :"+txdat1+"\n";
             msg3 = "                    timestamp stop  :"+txdat2+"\n";
         else:    
-            msg0 = "\nai-daemon v rezimu sleep (stroj je vypnut)\n";
+            msg0 = "ai-daemon v rezimu sleep (stroj je vypnut)...\n";
             msg1 = "start v modu: train, cas:"+str(current_time)+"\n";
             msg2 = "treninkova mnozina, timestamp start :"+txdat1+"\n";
             msg3 = "                    timestamp stop  :"+txdat2+"\n";
@@ -2112,7 +2154,8 @@ class NeuroDaemon():
                                   debug_mode    = self.debug_mode,
                                   current_date  = self.current_date,
                                   thread_name   = thread_name,
-                                  ilcnt         = self.ilcnt
+                                  ilcnt         = self.ilcnt,
+                                  ip_yesno      = self.ip_yesno
                             );
                             
         neural.setData(self.data);
@@ -2364,6 +2407,7 @@ class NeuroDaemon():
             traceback.print_exc();
             self.logger.error("Start daemon : %s sys.exit(1).... " %ex);
             sys.exit(1);
+
         
         return(context);
             
@@ -2388,9 +2432,9 @@ class NeuroDaemon():
                 sys.exit(1);
                 
         else:
-            message = "pid procesu %d existuje!!!. Daemon patrne bezi - exit(1)";
+            messge = "pid procesu %d existuje!!!. Daemon patrne bezi - exit(1)";
             self.logger.error(message %(pid));
-            os._exit(1);                                                                                                    
+            sys.exit(1);                                                                                                    
 
 #------------------------------------------------------------------------
 # start daemon
@@ -2405,7 +2449,7 @@ class NeuroDaemon():
         else:        
             message = "pid procesu %d existuje!!!. ai-daemon patrne bezi jako demon!!! - exit(1)";
             self.logger.error(message % pid);                                                                       
-            os._exit(1);                                                                                                    
+            sys.exit(1);                                                                                                    
 
 #------------------------------------------------------------------------
 # stop daemon
@@ -2419,12 +2463,12 @@ class NeuroDaemon():
             return;                                                                                                             
             message = "pid procesu neexistuje!!!. Daemon patrne nebezi - exit(1)";                                         
             self.logger.error(message);                                                                       
-            os._exit(1);
+            sys.exit(1);
         else:
             self.removePid(self.pidf)                                                                                                        
             message = "pid procesu %d existuje!!!. Daemon %d stop....";                                         
             self.logger.info(message % pid);                                                                       
-            os._exit(0);
+            sys.exit(0);
 
 #------------------------------------------------------------------------
 # stop daemon
@@ -2589,7 +2633,7 @@ def exception_handler(exctype, value, tb):
 #------------------------------------------------------------------------
 def signal_handler(self, signal, frame):
     #Catch Ctrl-C and Exit
-    sys.exit(0);
+    sys.exit(1);
 
 #------------------------------------------------------------------------
 # Help
@@ -2607,6 +2651,13 @@ def help (activations):
     print("                                 LSTM - Narocny model rekurentni site s feedback vazbami")
     print(" ");
     print("        --epochs          pocet ucebnich epoch - cislo v intervalu <1,256>")
+    print("                                 pocet epoch urcuje miru uceni. POZOR!!! i zde plati vseho s mirou")
+    print("                                 Pri malych cislech se muze stat, ze sit bude nedoucena ")
+    print("                                 a pri velkych cislech preucena - coz je totez jako nedoucena.")
+    print("                                 Jedna se tedy o podstatny parametr v procesu uceni site.")
+    print(" ");
+    print("        --batch           pocet vzorku do predikce - cislo v intervalu <16,256> pro rezim nodebug ")
+    print("                                                   - cislo v intervalu <16,32768> pro rezim nodebug ")
     print("                                 pocet epoch urcuje miru uceni. POZOR!!! i zde plati vseho s mirou")
     print("                                 Pri malych cislech se muze stat, ze sit bude nedoucena ")
     print("                                 a pri velkych cislech preucena - coz je totez jako nedoucena.")
@@ -2644,14 +2695,23 @@ def help (activations):
     print("                                 od pocatku mereni: 2022-02-15 00:00:00 ");
     print("                                 do konce   mereni: current timestamp() - 1 [den] ");
     print(" ");
-    print("        --ilcnt           vynechavani vet v treninkove mnozine - test s jakum poctem vet lze");
-    print("                                 jeste solidne predikovat 1 = vsechny vety");
-    print("                                                          2 = nactena kazda druha");
-    print("                                                          3 = nactena kazda treti...");
+    print("        --ilcnt           vynechavani vet v treninkove mnozine - test s jakym poctem vet lze");
+    print("                                 jeste solidne predikovat:  1 = vsechny vety");
+    print("                                                            2 = nactena kazda druha");
+    print("                                                            3 = nactena kazda treti...");
+    print(" ");
     print("        --shuffle         nahodne promichani dat ");
+    print(" ");
     print("                                 shuffle=TRUE - implicitni hodnota - treninkova data");
     print("                                                se promichaji                       ");
     print("                                 shuffle=FALSE- treninkova data se nepromichaji     ");
+    print(" ");
+    print("        --interpolate     interpolace treninkovych i predikcnich dat ");
+    print("                                 splinem LunivariateSpline ");
+    print(" ");
+    print("                                 interpolate = FALSE - implicitni hodnota, data nejsou");
+    print("                                 interpolovana  ");
+    print("                                 interpolate = TRUE - data jsou interpolovana ");
     print(" ");
     print("POZOR! typ behu 'train' muze trvat nekolik hodin, zejmena u typu site LSTM, GRU nebo BIDI!!!");
     print("       pricemz 'train' je povinny pri prvnim behu site. V rezimu 'train' se zapise ");
@@ -2662,19 +2722,21 @@ def help (activations):
     print(" ");
     print(" ");
     print(" ");
-    print("Pokud pozadujete zmenu parametu j emozno primo v programu poeditovat tyto promenne ");
+    print("Parametry treninkove a predikcni mnoziny jsou v ./cfg/ai-parms.cfg.");
+    print("Pozor!!! Parametry v treninkovem tenzoru (df_parm_X) se musi(!) ");
+    print("v casti teplot, shodovat s parametry k predikci (df_parm_x).  ");
+    print("Syntaxe v ai-parms.cfg je nasledujici: ");
     print(" ");
-    print("a nebo vyrobit soubor ai-parms.txt s touto syntaxi ");
-    print("  #Vystupni list parametru - co budeme chtit po siti predikovat");
-    print("  df_parmx = machinedata_m0412,teplota_pr01,x_temperature'");
     print(" ");
-    print("  #Tenzor predlozeny k uceni site");
-    print("  df_parmX = machinedata_m0412,teplota_pr01, x_temperature");
-    print(" ");
-    print("a ten nasledne ulozit v rootu aplikace. (tam kde je pythonovsky zdrojak. ");
-    print("POZOR!!! nazvy promennych se MUSI shodovat s hlavickovymi nazvy vstupniho datoveho CSV souboru (nebo souboruuu)");
-    print("a muzou tam byt i uvozovky: priklad: 'machinedata_m0112','machinedata_m0212', to pro snazsi copy a paste ");
-    print("z datoveho CSV souboru. ");
+    print("#--------------------------------------------------------------------------------------------");
+    print("#Tenzor predlozeny k predikci                                                                ");
+    print("#--------------------------------------------------------------------------------------------");
+    print("df_parmx = temp_lo03, temp_st02, temp_st06, temp_st07, temp_S1, temp_vr05,...");
+    print("#--------------------------------------------------------------------------------------------");
+    print("#Tenzor predlozeny k treninku                                                                ");
+    print("#--------------------------------------------------------------------------------------------");
+    print("df_parmX = dev_y4, dev_z4, temp_lo03, temp_st02, temp_st06, temp_st07, temp_S1, temp_vr05,...");
+    print("POZOR!!! nazvy promennych se MUSI shodovat s hlavickovymi nazvy vstupniho datoveho CSV souboru");
     print(" ");
     print("(C) GNU General Public License, autor Petr Lukasik , 2022 ");
     print(" ");
@@ -2706,9 +2768,6 @@ def checkActf(actf, activations):
             return(True);
 
     return(False);
-
-
-
 
 #------------------------------------------------------------------------
 # main
@@ -2776,6 +2835,7 @@ def main(argv):
     max_threads    = 1;
     ilcnt          = 1; # reccnt
     layers         = 2;
+    ip_yesno       = False;
     #debug_mode     = True;
     
         
@@ -2831,7 +2891,7 @@ def main(argv):
         try:
 
             opts, args = getopt.getopt(sys.argv[1:],
-                                       "hs:d:p:l:m:e:b:u:l:a:t1:t2:il:sh:h:x",
+                                       "hs:d:p:l:m:e:b:u:l:a:t1:t2:il:sh:ip:h:x",
                                       ["status=",
                                        "debug_mode=", 
                                        "pidfile=", 
@@ -2846,6 +2906,7 @@ def main(argv):
                                        "txdat2=", 
                                        "ilcnt=", 
                                        "shuffle=", 
+                                       "interpolate=", 
                                        "help="]
                                     );
             
@@ -2866,7 +2927,7 @@ def main(argv):
                    "run"      in status):
                     pass;
                 else:
-                    print("Chyba stavu demona povoleny jen <start, stop, restart, run a status");
+                    print("Chyba, povoleno: <start, stop, restart, run a status>");
                     help(activations);
                     sys.exit(1);    
                     
@@ -2889,15 +2950,15 @@ def main(argv):
                 
             elif opt in ("-e", "--epochs"):
                 try:
-                    r = range(4-1, 512+1);
+                    r = range(16-2, 128+2);
                     epochs = int(arg);
                     if epochs not in r:
-                        print("Chyba pri parsovani parametru: parametr 'epochs' musi byt cislo typu integer v rozsahu <4, 512>");
+                        print("Chyba: parametr 'epochs' musi byt integer v rozsahu <16, 128>");
                         help(activations);
                         sys.exit(1)    
                         
                 except:
-                    print("Chyba pri parsovani parametru: parametr 'epochs' musi byt cislo typu integer v rozsahu <32, 256>");
+                    print("Chyba: parametr 'epochs' musi byt integer v rozsahu <16, 128>");
                     help(activations);
                     sys.exit(1);
                         
@@ -2906,11 +2967,11 @@ def main(argv):
                     r = range(8-1, 2048+1);
                     units = int(arg);
                     if units not in r:
-                        print("Chyba pri parsovani parametru: parametr 'units' musi byt cislo typu integer v rozsahu <8, 2048>");
+                        print("Chyba: parametr 'units' musi byt integer v rozsahu <8, 2048>");
                         help(activations);
                         sys.exit(1);    
                 except:    
-                    print("Chyba pri parsovani parametru: parametr 'units' musi byt cislo typu integer v rozsahu <8, 2048>");
+                    print("Chyba: parametr 'units' musi byt integer v rozsahu <8, 2048>");
                     help(activations);
                     sys.exit(1);
 
@@ -2919,11 +2980,11 @@ def main(argv):
                     r = range(0, 12);
                     layers = int(arg);
                     if layers not in r:
-                        print("Chyba pri parsovani parametru: parametr 'layers' musi byt cislo typu integer v rozsahu <0, 12>");
+                        print("Chyba: parametr 'layers' musi byt integer v rozsahu <0, 12>");
                         help(activations);
                         sys.exit(1);    
                 except:    
-                    print("Chyba pri parsovani parametru: parametr 'layers' musi byt cislo typu integer v rozsahu <0, 12>");
+                    print("Chyba: parametr 'layers' musi byt integer v rozsahu <0, 12>");
                     help(activations);
                     sys.exit(1);
                     
@@ -2938,14 +2999,20 @@ def main(argv):
                         
             elif opt in ("-b", "--batch"):
                 try:
-                    r = range(16-1, 2048+1);
+                    r = range(16-2, 32768+2);
                     batch = int(arg);
                     if batch not in r:
-                        print("Chyba pri parsovani parametru: parametr 'batch' musi byt cislo typu integer v rozsahu <16, 2048>");
+                        if debug_mode:
+                            print("Chyba: parametr 'batch' musi byt integer v rozsahu <16, 32768>");
+                        else:    
+                            print("Chyba: parametr 'batch' musi byt integer v rozsahu <16, 256>");
                         help(activations);
                         sys.exit(1)    
                 except:    
-                    print("Chyba pri parsovani parametru: parametr 'batch' musi byt cislo typu integer v rozsahu <16, 2048>");
+                    if debug_mode:
+                        print("Chyba: parametr 'batch' musi byt integer v rozsahu <16, 32768>");
+                    else:    
+                        print("Chyba: parametr 'batch' musi byt integer v rozsahu <16, 256>");
                     help(activations);
                     sys.exit(1)
                     
@@ -2975,11 +3042,11 @@ def main(argv):
                     r = range(0, 128+1);
                     ilcnt  = int(arg);
                     if ilcnt not in r:
-                        print("Chyba pri parsovani parametru: parametr 'ilcnt' musi byt cislo typu integer v rozsahu <1, 128>");
+                        print("Chyba: parametr 'ilcnt' musi byt integer v rozsahu <1, 128>");
                         help(activations);
                         sys.exit(1)    
                 except:    
-                    print("Chyba pri parsovani parametru: parametr 'ilcnt' musi byt cislo typu integer v rozsahu <1, 128>");
+                    print("Chyba: parametr 'ilcnt' musi byt integer v rozsahu <1, 128>");
                     help(activations);
                     sys.exit(1)
 
@@ -2989,7 +3056,15 @@ def main(argv):
                     shuffling=True;
                 else:
                     shuffling=False;
+
+            elif opt in ("-ip", "--interpolate"):
+                sh = arg.upper();
+                if "TRUE" in sh:
+                    ip_yesno = True;
+                else:
+                    ip_yesno = False;
          
+                    
             elif opt in ["-h","--help"]:
                 help(activations);
                 sys.exit(0);
@@ -3019,7 +3094,8 @@ def main(argv):
                                       debug_mode     = debug_mode,
                                       current_date   = current_date,
                                       max_threads    = max_threads,
-                                      ilcnt          = ilcnt
+                                      ilcnt          = ilcnt,
+                                      ip_yesno       = ip_yesno
                                 );
        
                 daemon_.info();
@@ -3060,7 +3136,8 @@ def main(argv):
                                       debug_mode     = debug_mode,
                                       current_date   = current_date,
                                       max_threads    = max_threads,
-                                      ilcnt          = ilcnt
+                                      ilcnt          = ilcnt,
+                                      ip_yesno       = ip_yesno
                                 );
        
                 daemon_.info();
