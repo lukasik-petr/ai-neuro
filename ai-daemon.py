@@ -773,33 +773,29 @@ class DataFactory():
 
         
     #Vystupni list parametru - co budeme chtit po siti predikovat
-        self.df_parmx = ['temp_S1',
-                         'temp_pr01',
-                         'temp_pr02',
-                         'temp_pr03',
-                         'temp_vr01',
-                         'temp_vr02',
-                         'temp_vr03',
-                         'temp_vr04',
-                         'temp_vr05',
-                         'temp_vr06',
-                         'temp_vr07'];
+        self.df_parmx = [];
+                       # 'temp_S1',
+                       # 'temp_vr01',
+                       # 'temp_vr02',
+                       # 'temp_vr03',
+                       # 'temp_vr04',
+                       # 'temp_vr05',
+                       # 'temp_vr06',
+                       # 'temp_vr07'];
         
     #Tenzor predlozeny k uceni site
-        self.df_parmX = ['dev_x4',
-                         'dev_y4',
-                         'dev_z4', 
-                         'temp_S1',
-                         'temp_pr01',
-                         'temp_pr02',
-                         'temp_pr03',
-                         'temp_vr01',
-                         'temp_vr02',
-                         'temp_vr03',
-                         'temp_vr04',
-                         'temp_vr05',
-                         'temp_vr06',
-                         'temp_vr07'];
+        self.df_parmX = [];
+                       # 'dev_x4',
+                       # 'dev_y4',
+                       # 'dev_z4', 
+                       # 'temp_S1',
+                       # 'temp_vr01',
+                       # 'temp_vr02',
+                       # 'temp_vr03',
+                       # 'temp_vr04',
+                       # 'temp_vr05',
+                       # 'temp_vr06',
+                       # 'temp_vr07'];
         
         self.path_to_result = path_to_result;
         self.df_multiplier  = 1;   
@@ -833,39 +829,6 @@ class DataFactory():
 
 
 #------------------------------------------------------------------------
-# setDataX(self, df,  size_train, size_valid, size_test)
-#------------------------------------------------------------------------
-    def setDataX(self, df, df_test,  size_train, size_valid, size_test, txdt_b=False, shuffling=False):
-        #OSA XYZ
-        try:
-            
-            DataTrain_x = self.DataTrain;
-            DataTrain_x.train = pd.DataFrame(df[0 : size_train][self.df_parmX]);
-            DataTrain_x.valid = pd.DataFrame(df[size_train+1 : size_train + size_valid][self.df_parmX]);
-
-            if shuffling:
-                pass;
-                #DataTrain_x.train = DataTrain_x.train.reset_index(drop=True);
-                #DataTrain_x.train = shuffle(DataTrain_x.train);
-                #DataTrain_x.train = DataTrain_x.train.reset_index(drop=True);
-                #self.logger.debug("--shuffle = True");
-            
-            DataTrain_x.test  = df_test;
-            DataTrain_x.df_parm_x = self.df_parmx;  # data na ose x, pro rovinu X
-            DataTrain_x.df_parm_y = self.df_parmX;  # data na ose y, pro rovinu Y
-            DataTrain_x.axis = "OSA_XYZ";
-            
-            self.train = DataTrain_x.train;
-            self.valid = DataTrain_x.valid;
-            self.predict = DataTrain_x.test;
-            
-            return(DataTrain_x);
-    
-        except Exception as ex:
-            traceback.print_exc();
-            self.logger.error(traceback.print_exc());
-
-#------------------------------------------------------------------------
 # interpolateDF
 #------------------------------------------------------------------------
 #    interpoluje data splinem - vyhlazeni schodu na merenych artefaktech
@@ -895,6 +858,32 @@ class DataFactory():
         #       df[col_names[i]] = spl(x);
 
         return df;
+
+#------------------------------------------------------------------------
+# setDataX(self, df,  size_train, size_valid, size_test)
+#------------------------------------------------------------------------
+    def setDataX(self, df, df_test,  size_train, size_valid, size_test, txdt_b=False, shuffling=False):
+        #OSA XYZ
+        try:
+            
+            DataTrain_x = self.DataTrain;
+            DataTrain_x.train = pd.DataFrame(df[0 : size_train][self.df_parmX]);
+            DataTrain_x.valid = pd.DataFrame(df[size_train+1 : size_train + size_valid][self.df_parmX]);
+            
+            DataTrain_x.test  = df_test;
+            DataTrain_x.df_parm_x = self.df_parmx;  # data na ose x, pro rovinu X
+            DataTrain_x.df_parm_y = self.df_parmX;  # data na ose y, pro rovinu Y
+            DataTrain_x.axis = "OSA_XYZ";
+            
+            self.train = DataTrain_x.train;
+            self.valid = DataTrain_x.valid;
+            self.predict = DataTrain_x.test;
+            
+            return(DataTrain_x);
+    
+        except Exception as ex:
+            traceback.print_exc();
+            self.logger.error(traceback.print_exc());
 
     
 #-----------------------------------------------------------------------
@@ -1450,7 +1439,9 @@ class NeuronLayerLSTM():
 
         
         #parametry window-size
-        self.window         = 12;
+        self.windowX        = 16;
+        #parametry window-size
+        self.windowY        = 1;
         #parametry time-observe...
         self.n_in           = 2;
         self.n_out          = 2;
@@ -1518,7 +1509,7 @@ class NeuronLayerLSTM():
 #------------------------------------------------------------------------
     def fromTensorLSTMMean(self, dataset, dropNaN=True):
         df = pd.DataFrame(np.mean(dataset, axis=1));
-        df = df.iloc[ : -self.window, :];
+        df = df.iloc[ : -self.windowX, :];
         return(df);
     
 #------------------------------------------------------------------------    
@@ -1667,17 +1658,16 @@ class NeuronLayerLSTM():
         n_in         = self.n_in;
         n_out        = self.n_out;
 
-        window_X     = self.window;
-        window_Y     =  1;
+        window_X     = self.windowX;
+        window_Y     = self.windowY;
 
         model        = self.model_;
         units        = self.units;
 
         # ladici parametry
         layers_count  =  self.layers;        # pocet vrstev v hidden 
-        div           =  1;                  # delitel prvni vrstvy
         dropout_filter= True;                # Dropout
-        rate          =  0.005;              # a jeho rate....
+        rate          =  0.2;                # a jeho rate....
         
         try:
             y_train_data = np.array(self.toTimeSeries(DataTrain.train[DataTrain.df_parm_y], n_in, n_out));
@@ -1730,6 +1720,8 @@ class NeuronLayerLSTM():
             neural_model = Sequential();
             initializer  = tf.keras.initializers.RandomUniform(minval=-0.05, maxval=0.05, seed=None)
             neural_model.add(Input(shape=(X_train.X_dataset.shape[1], X_train.cols,)));
+            #pridana vstupni vrstva Dense -> lepsi vysledky RMSE
+            neural_model.add(layers.Dense(units= int(X_train.X_dataset.shape[1])));
 
 #------------------------------------------------------------------------    
 # Hidden layer - begin DENSE, LSTM, GRU, CONV1D
@@ -1738,7 +1730,7 @@ class NeuronLayerLSTM():
                     
                 if "DENSE" in model:
                     self.logger.debug(model);
-                    neural_model.add(layers.Dense(units= int(units / div),
+                    neural_model.add(layers.Dense(units= int(units),
                                               activation=self.actf,
                                               kernel_initializer=initializer,
                                               bias_initializer="zeros"
@@ -1747,7 +1739,7 @@ class NeuronLayerLSTM():
 
                 if "LSTM" in model:
                     self.logger.debug(model);
-                    neural_model.add(layers.LSTM(units = int(units / div), # self.units / 4
+                    neural_model.add(layers.LSTM(units = int(units), # self.units / 4
                                              activation=self.actf,
                                              recurrent_activation="sigmoid",
                                              use_bias=True,
@@ -1762,7 +1754,7 @@ class NeuronLayerLSTM():
 
                 if "GRU" in model:
                     self.logger.debug(model);
-                    neural_model.add(layers.GRU(units = int(units / div), # self.units / 4
+                    neural_model.add(layers.GRU(units = int(units), # self.units / 4
                                             activation=self.actf,
                                             recurrent_activation="sigmoid",
                                             use_bias=True,
@@ -1800,8 +1792,15 @@ class NeuronLayerLSTM():
         
             neural_model.add(layers.Dense(Y_train.cols, activation="relu"));
 
+            optimizer = tf.keras.optimizers.Adam(learning_rate = 0.0005,
+                                                  beta_1       = 0.9,
+                                                  beta_2       = 0.999,
+                                                  epsilon      = 1e-07
+                                            );
+
+
         # definice ztratove funkce a optimalizacniho algoritmu
-            neural_model.compile(loss='mse', optimizer='adam', metrics=["mse", "acc"]);
+            neural_model.compile(loss='mse', optimizer=optimizer, metrics=["mse", "acc"]);
         # natrenuj neural_model na vstupni dataset
             history = neural_model.fit(X_train.X_dataset, 
                                        Y_train.X_dataset, 
@@ -1852,7 +1851,7 @@ class NeuronLayerLSTM():
             
             x_test        = self.x_train_scaler.transform(x_test);
             
-            x_object      = self.toTensorLSTM(x_test, window=self.window);
+            x_object      = self.toTensorLSTM(x_test, window=self.windowX);
             dataset_rows, dataset_cols = x_test.shape;
         # predict
             y_result      = self.neural_model.predict(x_object.X_dataset);
@@ -1925,7 +1924,7 @@ class NeuronLayerLSTM():
 
             
             stopTime = int(time.time_ns());
-            self.logger.info ("Thread: %s, cas vypoctu %d [ms] " %(thread_name, int((stopTime - startTime)/1000000000)));
+            self.logger.info ("Thread- %s, predict: %d [ms] " %(thread_name, int((stopTime - startTime)/1000000)));
 
             return();
 
@@ -2612,6 +2611,7 @@ def setEnv(path, model, type):
             
         try:
             shutil.copy("ai-daemon.sh", Path(path_2+"/src"));
+            shutil.copy("./py-src/ai-daemon.py", Path(path_2+"/src"));
         except shutil.SpecialFileError as error:
             print("Chyba pri kopii ai-parms.txt.", error)
         except:
@@ -2707,27 +2707,19 @@ def help (activations):
     print("                                 shuffle=FALSE- treninkova data se nepromichaji     ");
     print(" ");
     print("        --interpolate     interpolace treninkovych i predikcnich dat ");
-    print("                                 splinem LunivariateSpline ");
+    print("                                 splinem univariateSpline ");
     print(" ");
     print("                                 interpolate = FALSE - implicitni hodnota, data nejsou");
     print("                                 interpolovana  ");
     print("                                 interpolate = TRUE - data jsou interpolovana ");
-    print(" ");
-    print("POZOR! typ behu 'train' muze trvat nekolik hodin, zejmena u typu site LSTM, GRU nebo BIDI!!!");
-    print("       pricemz 'train' je povinny pri prvnim behu site. V rezimu 'train' se zapise ");
-    print("       natrenovany model site..");
-    print("       V normalnim provozu natrenovane site doporucuji pouzit parametr 'predict' ktery.");
-    print("       spusti normalni beh site z jiz natrenovaneho modelu.");
-    print("       Takze: budte trpelivi...");
     print(" ");
     print(" ");
     print(" ");
     print("Parametry treninkove a predikcni mnoziny jsou v ./cfg/ai-parms.cfg.");
     print("Pozor!!! Parametry v treninkovem tenzoru (df_parm_X) se musi(!) ");
     print("v casti teplot, shodovat s parametry k predikci (df_parm_x).  ");
+    print(" ");
     print("Syntaxe v ai-parms.cfg je nasledujici: ");
-    print(" ");
-    print(" ");
     print("#--------------------------------------------------------------------------------------------");
     print("#Tenzor predlozeny k predikci                                                                ");
     print("#--------------------------------------------------------------------------------------------");
@@ -2862,7 +2854,6 @@ def main(argv):
 
 
 
-    path_to_result, current_date = setEnv(path=path_to_result, model=model, type=type);
     logger = setLogger(logf);
     
 #-----------------------------------------------------------------------------
@@ -3072,6 +3063,15 @@ def main(argv):
         if len(sys.argv) < 2:
             help(activations);
             sys.exit(1);
+
+            
+#-----------------------------------------------------------------------------
+# set environment
+#-----------------------------------------------------------------------------
+        path_to_result, current_date = setEnv(path=path_to_result,
+                                              model=model,
+                                              type=type);
+    
         
 #-----------------------------------------------------------------------------
 # Start status - run as daemon 
